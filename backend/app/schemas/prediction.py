@@ -14,6 +14,7 @@ class MunicipalityPredictionCreate(BaseModel):
     predicted_population: int | None = None
     predicted_birth_rate: float | None = None
     predicted_death_rate: float | None = None
+    predicted_natural_increase_rate: float | None = None
     predicted_migration: int | None = None
 
     confidence: dict = Field(default_factory=dict)
@@ -39,6 +40,7 @@ class MunicipalityPredictionRead(BaseModel):
     predicted_population: int | None = None
     predicted_birth_rate: float | None = None
     predicted_death_rate: float | None = None
+    predicted_natural_increase_rate: float | None = None
     predicted_migration: int | None = None
 
     confidence: dict

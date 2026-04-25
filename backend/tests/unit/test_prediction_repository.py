@@ -40,6 +40,7 @@ async def test_create_prediction_maps_metadata_to_extra_metadata() -> None:
         model_name='linreg',
         model_version='1.0',
         model_run_id='run-1',
+        predicted_natural_increase_rate=-1.6,
         metadata={'source': 'test'},
         confidence={'p90': [100, 120]},
     )
@@ -48,6 +49,7 @@ async def test_create_prediction_maps_metadata_to_extra_metadata() -> None:
 
     assert result.id == 10
     assert result.extra_metadata == {'source': 'test'}
+    assert result.predicted_natural_increase_rate == -1.6
     session.add.assert_called_once()
     session.commit.assert_awaited_once()
 

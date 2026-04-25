@@ -11,6 +11,8 @@ RUN pip install --no-cache-dir -r /app/requirements.txt
 COPY app /app/app
 COPY alembic.ini /app/alembic.ini
 COPY alembic /app/alembic
+COPY ml /app/ml
+COPY seed /app/seed
 
 EXPOSE 8000
 

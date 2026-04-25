@@ -40,7 +40,7 @@ def upgrade() -> None:
         sa.Column('population', sa.Integer(), nullable=True),
         sa.Column('birth_rate', sa.Numeric(precision=8, scale=4), nullable=True),
         sa.Column('death_rate', sa.Numeric(precision=8, scale=4), nullable=True),
-        sa.Column('migration', sa.Numeric(precision=10, scale=6), nullable=True),
+        sa.Column('migration', sa.Integer(), nullable=True),
         sa.CheckConstraint('year >= 1900', name='ck_municipality_data_year_min'),
         sa.ForeignKeyConstraint(['municipality_id'], ['municipalities.id'], ondelete='CASCADE'),
         sa.PrimaryKeyConstraint('id'),

@@ -17,6 +17,7 @@ class FakePrediction:
     predicted_population: int | None
     predicted_birth_rate: float | None
     predicted_death_rate: float | None
+    predicted_natural_increase_rate: float | None
     predicted_migration: int | None
     confidence: dict
     extra_metadata: dict
@@ -37,6 +38,7 @@ class FakePredictionRepo:
             predicted_population=payload.predicted_population,
             predicted_birth_rate=payload.predicted_birth_rate,
             predicted_death_rate=payload.predicted_death_rate,
+            predicted_natural_increase_rate=payload.predicted_natural_increase_rate,
             predicted_migration=payload.predicted_migration,
             confidence=payload.confidence,
             extra_metadata=payload.extra_metadata,
@@ -57,6 +59,7 @@ class FakePredictionRepo:
                 predicted_population=120000,
                 predicted_birth_rate=10.2,
                 predicted_death_rate=11.8,
+                predicted_natural_increase_rate=-1.6,
                 predicted_migration=200,
                 confidence={},
                 extra_metadata={},
@@ -82,6 +85,7 @@ async def test_create_prediction(client, app) -> None:
             'predicted_population': 120000,
             'predicted_birth_rate': 10.2,
             'predicted_death_rate': 11.8,
+            'predicted_natural_increase_rate': -1.6,
             'predicted_migration': 200,
             'confidence': {},
             'metadata': {},
