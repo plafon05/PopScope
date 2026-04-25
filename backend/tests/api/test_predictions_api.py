@@ -2,6 +2,7 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 
 import pytest
+from sqlalchemy.exc import IntegrityError
 
 from app.api.deps import get_prediction_repository
 
@@ -70,6 +71,27 @@ class FakePredictionRepo:
         ], 1
 
 
+class FakeDuplicatePredictionRepo:
+    async def create_prediction(self, payload):
+        raise IntegrityError(
+            statement='INSERT INTO municipality_predictions ...',
+            params={},
+            orig=Exception('duplicate key value violates unique constraint "uq_prediction_run"'),
+        )
+
+
+class FakeMissingMunicipalityRepo:
+    async def create_prediction(self, payload):
+        raise IntegrityError(
+            statement='INSERT INTO municipality_predictions ...',
+            params={},
+            orig=Exception(
+                'insert or update on table "municipality_predictions" violates foreign key constraint '
+                '"municipality_predictions_municipality_id_fkey"'
+            ),
+        )
+
+
 @pytest.mark.asyncio
 async def test_create_prediction(client, app) -> None:
     app.dependency_overrides[get_prediction_repository] = lambda: FakePredictionRepo()
@@ -108,3 +130,43 @@ async def test_list_predictions(client, app) -> None:
 
     assert response.status_code == 200
     assert response.json()['total'] == 1
+
+
+@pytest.mark.asyncio
+async def test_create_prediction_duplicate_returns_409(client, app) -> None:
+    app.dependency_overrides[get_prediction_repository] = lambda: FakeDuplicatePredictionRepo()
+
+    response = await client.post(
+        '/api/v1/predictions',
+        json={
+            'municipality_id': 1,
+            'target_year': 2028,
+            'model_name': 'linreg',
+            'model_version': '1.0',
+            'model_run_id': 'run-1',
+            'metadata': {},
+        },
+    )
+    app.dependency_overrides.clear()
+
+    assert response.status_code == 409
+
+
+@pytest.mark.asyncio
+async def test_create_prediction_missing_municipality_returns_404(client, app) -> None:
+    app.dependency_overrides[get_prediction_repository] = lambda: FakeMissingMunicipalityRepo()
+
+    response = await client.post(
+        '/api/v1/predictions',
+        json={
+            'municipality_id': 999999,
+            'target_year': 2028,
+            'model_name': 'linreg',
+            'model_version': '1.0',
+            'model_run_id': 'run-2',
+            'metadata': {},
+        },
+    )
+    app.dependency_overrides.clear()
+
+    assert response.status_code == 404

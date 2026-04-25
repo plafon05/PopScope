@@ -36,9 +36,16 @@ docker compose up -d (если нужен не демон, то уберите -
 - **PostgreSQL** (порт 5433)
 - **Backend FastAPI** (порт 8000)
 - Применит миграции БД автоматически (через Alembic)
-- Загрузит данные муниципалитетов автоматически
 
-### 4. Запустите фронтенд
+### 4. (Опционально) импортируйте CSV-данные в БД
+
+```bash
+docker compose --profile data-seed run --rm data-import
+```
+
+Импорт данных выполняется отдельным профилем и не запускается по умолчанию.
+
+### 5. Запустите фронтенд
 
 В **отдельном терминале**:
 
@@ -50,7 +57,7 @@ npm run dev
 
 Фронтенд будет доступен на http://localhost:5173
 
-### 5. Проверьте, что все работает
+### 6. Проверьте, что все работает
 
 **Backend API:**
 ```bash
@@ -62,7 +69,7 @@ curl http://localhost:8000/api/v1/health
 **Frontend:**
 - Откройте [http://localhost:5173](http://localhost:5173) в браузере (Vite dev-сервер)
 
-### 6. Останавливайте сервисы, когда нужно
+### 7. Останавливайте сервисы, когда нужно
 ```bash
 docker compose down
 ```
@@ -134,7 +141,7 @@ PopScope/
 │   │   ├── pages/
 │   │   └── ...
 │   └── package.json
-├── db/              # SQL инициализация
+├── db/              # legacy SQL (справочно, схема через Alembic)
 ├── docker-compose.yml
 └── .env
 ```
@@ -165,11 +172,11 @@ POSTGRES_HOST_PORT=5434  # или другой порт
 ```
 ### Данные не загрузились
 ```bash
-# Посмотрите логи seed
-docker compose logs backend | grep -E "Загружено|пропускаем|Seeded"
+# Запустите импорт вручную
+docker compose --profile data-seed run --rm data-import
 
-# Загрузите вручную
-docker compose exec backend python seeds/seed.py
+# Посмотрите логи импорта
+docker compose --profile data-seed logs data-import
 ```
 
 ### Ошибка подключения к БД
@@ -218,7 +225,7 @@ docker compose logs -f db
 
 # Выполнение команды в контейнере
 docker compose exec backend bash
-docker compose exec db psql -U postgres -d popscope_db
+docker compose exec db psql -U "$POSTGRES_USER" -d "$POSTGRES_DB"
 
 # Пересборка контейнеров (после изменения Dockerfile)
 docker compose build

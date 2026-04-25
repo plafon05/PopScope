@@ -16,7 +16,10 @@ class Settings(BaseSettings):
     app_env: Literal['dev', 'test', 'prod'] = Field(default='dev', alias='APP_ENV')
     debug: bool = Field(default=False, alias='APP_DEBUG')
     api_prefix: str = Field(default='/api/v1', alias='API_PREFIX')
-    allowed_origins: list[str] = Field(default_factory=lambda: ['*'])
+    allowed_origins: list[str] = Field(
+        default_factory=lambda: ['http://localhost:5173'],
+        alias='ALLOWED_ORIGINS',
+    )
 
     database_url: str = Field(
         default='postgresql+asyncpg://<db_user>:<db_password>@db:5432/<db_name>',

@@ -1,4 +1,5 @@
 from sqlalchemy import and_, func, select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.db.models import MunicipalityPrediction
@@ -15,7 +16,11 @@ class PredictionRepository:
     ) -> MunicipalityPrediction:
         prediction = MunicipalityPrediction(**payload.model_dump())
         self.session.add(prediction)
-        await self.session.commit()
+        try:
+            await self.session.commit()
+        except IntegrityError:
+            await self.session.rollback()
+            raise
         await self.session.refresh(prediction)
         return prediction
 

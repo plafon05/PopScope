@@ -3,6 +3,7 @@ from types import SimpleNamespace
 from unittest.mock import AsyncMock, Mock
 
 import pytest
+from sqlalchemy.exc import IntegrityError
 
 from app.repositories.predictions import PredictionRepository
 from app.schemas.prediction import MunicipalityPredictionCreate
@@ -78,3 +79,32 @@ async def test_list_predictions() -> None:
     assert total == 1
     assert items[0].model_run_id == 'run-1'
     assert session.execute.await_count == 2
+
+
+@pytest.mark.asyncio
+async def test_create_prediction_rolls_back_on_integrity_error() -> None:
+    session = AsyncMock()
+    session.add = Mock()
+    session.commit = AsyncMock(
+        side_effect=IntegrityError(
+            statement='INSERT INTO municipality_predictions ...',
+            params={},
+            orig=Exception('duplicate key value violates unique constraint "uq_prediction_run"'),
+        )
+    )
+    session.rollback = AsyncMock()
+
+    repo = PredictionRepository(session)
+    payload = MunicipalityPredictionCreate(
+        municipality_id=1,
+        target_year=2028,
+        model_name='linreg',
+        model_version='1.0',
+        model_run_id='run-1',
+        metadata={},
+    )
+
+    with pytest.raises(IntegrityError):
+        await repo.create_prediction(payload)
+
+    session.rollback.assert_awaited_once()

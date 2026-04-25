@@ -1,4 +1,6 @@
 from fastapi import APIRouter, Depends, Query
+from fastapi import HTTPException, status
+from sqlalchemy.exc import IntegrityError
 
 from app.api.deps import get_prediction_repository
 from app.repositories.predictions import PredictionRepository
@@ -16,7 +18,24 @@ async def create_prediction(
     payload: MunicipalityPredictionCreate,
     repository: PredictionRepository = Depends(get_prediction_repository),
 ) -> MunicipalityPredictionRead:
-    prediction = await repository.create_prediction(payload)
+    try:
+        prediction = await repository.create_prediction(payload)
+    except IntegrityError as exc:
+        error_message = str(exc.orig).lower() if exc.orig else str(exc).lower()
+        if 'uq_prediction_run' in error_message or 'duplicate key value' in error_message:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail='Prediction with the same model_run_id, municipality_id and target_year already exists',
+            ) from exc
+        if 'foreign key' in error_message and 'municipality_id' in error_message:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail='Municipality not found',
+            ) from exc
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail='Prediction cannot be created with the provided payload',
+        ) from exc
     return MunicipalityPredictionRead.model_validate(prediction)
 
 

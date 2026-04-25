@@ -37,7 +37,23 @@ services:
       - '8000:8000'
     volumes:
       - ./backend:/app
-    command: sh -c "python -m alembic upgrade head && python seeds/seed.py && uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload"
+    command: sh -c "python -m alembic upgrade head && uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload"
+
+  data-import:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: popscope-data-import
+    env_file:
+      - .env
+    depends_on:
+      db:
+        condition: service_healthy
+    volumes:
+      - ./backend:/app
+    command: sh -c "python -m alembic upgrade head && python seed/seed.py"
+    profiles:
+      - data-seed
 
 volumes:
   postgres_data:
