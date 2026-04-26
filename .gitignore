@@ -36,6 +36,9 @@ env/
 backend/.venv/
 backend/venv/
 
+backend/ml/model.json
+backend/ml/predictions_2024_2038.json
+
 # Frontend
 frontend/node_modules/
 frontend/dist/
