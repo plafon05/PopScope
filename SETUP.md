@@ -1,240 +1,173 @@
-# 🚀 Руководство по запуску PopScope
+# Руководство по запуску PopScope
 
-## Предварительные требования
+Документ описывает рекомендуемый рабочий сценарий проекта:
+- база и backend в Docker,
+- frontend локально через Vite.
 
-Убедитесь, что установлены:
-- **Docker** ([скачать](https://www.docker.com/products/docker-desktop))
-- **Docker Compose** (обычно идет с Docker Desktop)
-- **Node.js 18+** и **npm** (для локальной работы с фронтенд без Docker, если нужно)
+## 1. Что нужно заранее
 
-Проверьте установку:
+Установите:
+- Docker Desktop
+- Docker Compose (обычно входит в Docker Desktop)
+- Node.js 18+ и npm
+
+Проверьте:
 ```bash
 docker --version
-docker compose --version
+docker compose version
+node -v
+npm -v
 ```
 
-## ⚙️ Первоначальная настройка
+## 2. Подготовка конфигурации
 
-### 1. Клонируйте репозиторий
+В корне проекта:
 ```bash
-git clone <repository-url>
-cd PopScope
+cp .env.example .env
 ```
 
-### 2. Проверьте файл `.env`
+При необходимости проверьте значения в `.env`:
+- `POSTGRES_DB`
+- `POSTGRES_USER`
+- `POSTGRES_PASSWORD`
+- `DATABASE_URL` (должен ссылаться на хост `db` внутри docker compose)
+- `POSTGRES_HOST_PORT` (по умолчанию `5433`)
 
-Пример файла в .env.example
-
-## 🐳 Запуск с Docker Compose
-
-### 3. Импортируйте CSV-данные в БД
-
+Для frontend (опционально, если нужно переопределить API URL):
 ```bash
-docker compose --profile data-seed run --rm data-import
+cp frontend/.env.example frontend/.env.local
 ```
 
-Импорт данных выполняется отдельным профилем и не запускается по умолчанию.
+## 3. Запуск backend и БД
 
-### 4. Запустите все сервисы
+Из корня проекта:
 ```bash
-docker compose up -d (если нужен не демон, то уберите -d)
+docker compose up -d db backend
 ```
 
-Это запустит:
-- **PostgreSQL** (порт 5433)
-- **Backend FastAPI** (порт 8000)
-- Применит миграции БД автоматически (через Alembic)
-
-### 5. Запустите фронтенд
-
-В **отдельном терминале**:
-
+Проверьте, что backend жив:
 ```bash
-cd frontend
-npm install   # только при первом запуске
-npm run dev
+curl -s http://localhost:8000/api/v1/health/live
+curl -s http://localhost:8000/api/v1/health/ready
 ```
 
-Фронтенд будет доступен на http://localhost:5173
+Если всё в порядке:
+- API: `http://localhost:8000`
+- Swagger: `http://localhost:8000/docs`
+- ReDoc: `http://localhost:8000/redoc`
 
-### 6. Проверьте, что все работает
+## 4. Запуск frontend
 
-**Backend API:**
-```bash
-curl http://localhost:8000/api/v1/health
-```
-
-Должны получить успешный ответ.
-
-**Frontend:**
-- Откройте [http://localhost:5173](http://localhost:5173) в браузере (Vite dev-сервер)
-
-### 7. Останавливайте сервисы, когда нужно
-```bash
-docker compose down
-```
-
-Чтобы также удалить данные БД:
-```bash
-docker compose down -v
-```
-
----
-
-## 🔧 Локальная разработка (опционально)
-
-Если хотите разрабатывать без Docker:
-
-### Backend (Python)
-```bash
-cd backend
-
-# Создайте виртуальное окружение
-python -m venv venv
-source venv/bin/activate  # macOS/Linux
-# или
-venv\Scripts\activate     # Windows
-
-# Установите зависимости
-pip install -r requirements.txt
-
-# Запустите тесты
-pytest
-
-# Запустите сервер (требует PostgreSQL отдельно)
-uvicorn app.main:app --reload
-```
-
-### Frontend (Node.js)
+В отдельном терминале:
 ```bash
 cd frontend
-
-# Установите зависимости
 npm install
-
-# Запустите dev-сервер
 npm run dev
-
-# Собрите production версию
-npm run build
 ```
 
----
+Frontend будет доступен на `http://localhost:5173`.
 
-## 📋 Структура проекта
+## 5. Загрузка данных и прогнозов
 
-```
-PopScope/
-├── backend/           # FastAPI приложение
-│   ├── app/          # Основной код
-│   │   ├── api/      # API endpoints
-│   │   ├── db/       # Модели БД
-│   │   ├── schemas/  # Pydantic схемы
-│   │   ├── services/ # Бизнес-логика
-│   │   └── ...
-│   ├── tests/        # Тесты
-│   └── requirements.txt
-├── frontend/         # React приложение
-│   ├── src/
-│   │   ├── app/      # Главные компоненты
-│   │   ├── components/
-│   │   ├── pages/
-│   │   └── ...
-│   └── package.json
-├── db/              # legacy SQL (справочно, схема через Alembic)
-├── docker-compose.yml
-└── .env
-```
-
----
-
-## 🧪 Тестирование
-
+Из корня проекта:
 ```bash
-# Запустите все тесты
-docker compose exec backend pytest
-
-# Запустите конкретный тест
-docker compose exec backend pytest tests/api/test_health_api.py
-
-# С покрытием
-docker compose exec backend pytest --cov
-```
-
----
-
-## 🆘 Решение проблем
-
-### Порты уже заняты
-Если порты 5433 или 8000 уже используются, измените их в `.env`:
-```env
-POSTGRES_HOST_PORT=5434  # или другой порт
-```
-### Данные не загрузились
-```bash
-# Запустите импорт вручную
 docker compose --profile data-seed run --rm data-import
-
-# Посмотрите логи импорта
-docker compose --profile data-seed logs data-import
 ```
 
-### Ошибка подключения к БД
-```bash
-# Проверьте, что контейнер БД запущен и здоров
-docker compose ps
+Что делает команда:
+- применяет миграции,
+- загружает муниципалитеты,
+- загружает исторические данные,
+- обучает модель и загружает прогнозы (если их ещё нет).
 
-# Просмотрите логи
-docker compose logs db
+## 6. Проверка, что всё готово
+
+Проверка данных:
+```bash
+curl -s "http://localhost:8000/api/v1/municipalities?limit=1&offset=0"
+curl -s "http://localhost:8000/api/v1/municipality-data?limit=1&offset=0"
+curl -s "http://localhost:8000/api/v1/predictions?limit=1&offset=0"
 ```
 
-### Миграции не применились
+## 7. Ежедневная работа
+
+Запустить:
 ```bash
-# Примените их вручную
-docker compose exec backend python -m alembic upgrade head
+docker compose up -d db backend
 ```
 
-### Сбросьте все (осторожно!)
+Остановить:
 ```bash
-docker compose down -v
-docker compose up -d
+docker compose down
 ```
 
----
-
-## 📊 API документация
-
-После запуска backend доступна Swagger документация:
-- **Swagger UI:** http://localhost:8000/docs
-- **ReDoc:** http://localhost:8000/redoc
-
----
-
-## 🎯 Основные команды
-
+Логи backend:
 ```bash
-# Запуск
-docker compose up -d
+docker compose logs --tail=100 backend
+```
 
-# Остановка
+Как остановить:
+```bash
+# Остановить и удалить контейнеры/сеть проекта
 docker compose down
 
-# Просмотр логов
-docker compose logs -f backend
-docker compose logs -f db
+# Просто остановить контейнеры (без удаления)
+docker compose stop db backend
 
-# Выполнение команды в контейнере
-docker compose exec backend bash
-docker compose exec db psql -U "$POSTGRES_USER" -d "$POSTGRES_DB"
-
-# Пересборка контейнеров (после изменения Dockerfile)
-docker compose build
-docker compose up -d
+# Полный сброс (включая volume БД)
+docker compose down -v
 ```
 
----
+## 8. Пересчёт прогнозов после изменений ML-логики
 
-✅ **Готово!** Приложение должно быть доступно:
-- Frontend: http://localhost:5173
-- Backend API: http://localhost:8000
-- Database: localhost:5433
+Важно: обычный `data-import` пропустит прогнозы, если таблица `municipality_predictions` уже заполнена.
+
+Принудительный пересчёт:
+```bash
+docker compose exec -T db sh -lc 'psql -U "$POSTGRES_USER" -d "$POSTGRES_DB" -c "TRUNCATE TABLE municipality_predictions RESTART IDENTITY;"'
+docker compose exec -T backend sh -lc 'rm -f /app/ml/model.json /app/ml/predictions_2024_2038.json'
+docker compose --profile data-seed run --rm data-import
+```
+
+Проверка нового run:
+```bash
+curl -s "http://localhost:8000/api/v1/predictions?limit=1&offset=0"
+```
+Смотрите поле `model_run_id`.
+
+## 9. Тесты
+
+Backend unit:
+```bash
+pytest backend/tests/unit/test_ml_forecasting.py
+```
+
+Backend API:
+```bash
+pytest backend/tests/api/test_predictions_api.py
+```
+
+Через контейнер backend:
+```bash
+docker compose exec -T backend pytest
+```
+
+## 10. Частые проблемы
+
+### 10.1 `data-import` пишет: `Прогнозы уже загружены, пропускаем`
+Это штатное поведение. Используйте сценарий из раздела 8.
+
+### 10.2 `permission denied while trying to connect to the docker API`
+Проверьте, что Docker Desktop запущен и текущий пользователь имеет доступ к Docker socket.
+
+### 10.3 Backend не поднимается после изменений
+Посмотрите логи:
+```bash
+docker compose logs --tail=200 backend
+```
+
+### 10.4 Нужно сбросить всё состояние
+```bash
+docker compose down -v
+```
+Это удалит данные Postgres volume.
