@@ -23,6 +23,11 @@ RATE_FLOOR = -0.05
 RATE_CEILING = 0.08
 NATURAL_RATE_FLOOR = -0.08
 NATURAL_RATE_CEILING = 0.08
+NATURAL_INTERVAL_Z_SCORE = 1.0
+NATURAL_INTERVAL_LEVEL = 0.68
+NATURAL_INTERVAL_WIDTH_MULTIPLIER = 0.8
+NATURAL_INTERVAL_MIN_SAMPLE_SIZE = 3
+NATURAL_INTERVAL_BLEND_SAMPLE_SIZE = 6
 
 
 @dataclass(frozen=True)
@@ -447,12 +452,18 @@ def _fit_series_model(
     regression = _linear_regression(points, spec, weights)
     intercept = regression['intercept']
     transformed_points = [(year, _transform(value, spec)) for year, value in points]
+    years = [year for year, _ in transformed_points]
+    values = [value for _, value in transformed_points]
     long_slope = regression['slope']
     short_slope = _recent_slope(transformed_points)
     slope = (
         (1.0 - spec.recent_trend_weight) * long_slope
         + spec.recent_trend_weight * short_slope
     )
+    # Keep intercept consistent with blended slope; otherwise residuals are inflated.
+    mean_year = _weighted_mean(years, weights, fallback=years[-1] if years else 0.0)
+    mean_value = _weighted_mean(values, weights, fallback=values[-1] if values else 0.0)
+    intercept = mean_value - slope * mean_year
 
     transformed_values = [value for _, value in transformed_points]
     residuals = [
@@ -560,6 +571,94 @@ def _serialize_error_metrics(metrics: ErrorMetrics) -> dict[str, float | int | N
         'mape': _round_error_metric(metrics.mape),
         'sample_size': metrics.sample_size,
     }
+
+
+def _serialize_horizon_error_metrics(
+    metrics_by_horizon: dict[int, ErrorMetrics],
+) -> dict[str, dict[str, float | int | None]]:
+    return {
+        str(horizon): _serialize_error_metrics(metrics)
+        for horizon, metrics in sorted(metrics_by_horizon.items())
+    }
+
+
+def _expand_horizon_metrics(
+    metrics_by_horizon: dict[int, ErrorMetrics],
+    *,
+    max_horizon: int,
+    fallback_metrics: ErrorMetrics | None = None,
+) -> dict[int, ErrorMetrics]:
+    if max_horizon <= 0:
+        return {}
+
+    if not metrics_by_horizon:
+        if fallback_metrics is None or fallback_metrics.rmse is None or fallback_metrics.rmse <= 0:
+            return {}
+        return {
+            horizon: ErrorMetrics(
+                mae=fallback_metrics.mae,
+                rmse=fallback_metrics.rmse,
+                mape=fallback_metrics.mape,
+                sample_size=fallback_metrics.sample_size,
+            )
+            for horizon in range(1, max_horizon + 1)
+        }
+
+    fallback_rmse = (
+        float(fallback_metrics.rmse)
+        if fallback_metrics is not None and fallback_metrics.rmse is not None and fallback_metrics.rmse > 0
+        else None
+    )
+    min_sample = NATURAL_INTERVAL_MIN_SAMPLE_SIZE
+    blend_sample = max(min_sample + 1, NATURAL_INTERVAL_BLEND_SAMPLE_SIZE)
+
+    expanded: dict[int, ErrorMetrics] = {}
+    previous_effective_rmse: float | None = None
+    for horizon in range(1, max_horizon + 1):
+        current = metrics_by_horizon.get(horizon)
+        current_rmse = (
+            float(current.rmse)
+            if current is not None and current.rmse is not None and current.rmse > 0
+            else None
+        )
+
+        reference_rmse = previous_effective_rmse if previous_effective_rmse is not None else fallback_rmse
+        effective_rmse = current_rmse
+
+        if effective_rmse is None:
+            effective_rmse = reference_rmse
+        elif reference_rmse is not None:
+            sample_size = max(0, current.sample_size if current is not None else 0)
+            if sample_size < blend_sample:
+                blend_weight = (sample_size - min_sample) / (blend_sample - min_sample)
+                blend_weight = max(0.0, min(1.0, blend_weight))
+                effective_rmse = blend_weight * effective_rmse + (1.0 - blend_weight) * reference_rmse
+
+        if effective_rmse is None:
+            continue
+
+        if previous_effective_rmse is not None:
+            effective_rmse = max(effective_rmse, previous_effective_rmse)
+
+        if (
+            current is not None
+            and current.mae is not None
+            and current_rmse is not None
+            and current_rmse > 0
+        ):
+            mae = current.mae * (effective_rmse / current_rmse)
+        else:
+            mae = fallback_metrics.mae if fallback_metrics is not None else None
+
+        expanded[horizon] = ErrorMetrics(
+            mae=mae,
+            rmse=effective_rmse,
+            mape=current.mape if current is not None else (fallback_metrics.mape if fallback_metrics is not None else None),
+            sample_size=current.sample_size if current is not None else (fallback_metrics.sample_size if fallback_metrics is not None else 0),
+        )
+        previous_effective_rmse = effective_rmse
+
+    return expanded
 
 
 def _build_metric_summary(
@@ -857,6 +956,142 @@ def _merge_metric_collections(
     return ErrorMetrics(mae=mae, rmse=rmse, mape=mape, sample_size=sample_size)
 
 
+def _forecast_natural_increase_sequence(
+    birth_points: list[tuple[int, float]],
+    death_points: list[tuple[int, float]],
+    global_models: dict[str, SeriesModel],
+    yearly_death_autoreg_models: dict[int, AutoregModel],
+    death_blend_weight: float,
+    target_year: int,
+) -> float | None:
+    if not birth_points or not death_points:
+        return None
+
+    birth_model = _fit_series_model(
+        birth_points,
+        METRIC_SPECS['birth_rate'],
+        global_models['birth_rate'],
+    )
+    predicted_birth = _forecast_from_model(
+        birth_model,
+        METRIC_SPECS['birth_rate'],
+        target_year,
+    )
+    trend_death_model = _fit_series_model(
+        death_points,
+        METRIC_SPECS['death_rate'],
+        global_models['death_rate'],
+    )
+    trend_death_prediction = _forecast_from_model(
+        trend_death_model,
+        METRIC_SPECS['death_rate'],
+        target_year,
+    )
+
+    predicted_death = trend_death_prediction
+    if len(death_points) >= AUTOREG_LAGS and _has_consecutive_history(death_points[-AUTOREG_LAGS:]):
+        autoreg_model = yearly_death_autoreg_models.get(target_year)
+        if autoreg_model is not None:
+            autoreg_prediction = _forecast_death_autoreg_sequence(
+                death_points[-AUTOREG_LAGS:],
+                autoreg_model,
+                target_year,
+            )
+            predicted_death = _clip(
+                (1.0 - death_blend_weight) * trend_death_prediction
+                + death_blend_weight * autoreg_prediction,
+                METRIC_SPECS['death_rate'],
+            )
+
+    return _clip(
+        predicted_birth - predicted_death,
+        METRIC_SPECS['natural_increase_rate'],
+    )
+
+
+def _build_natural_interval_metrics_for_rows(
+    municipality_rows: list[dict[str, Any]],
+    global_models: dict[str, SeriesModel],
+    yearly_death_autoreg_models: dict[int, AutoregModel],
+    death_blend_weight: float,
+    max_horizon: int = BACKTEST_HOLDOUT_POINTS,
+) -> dict[int, ErrorMetrics]:
+    errors_by_horizon: dict[int, list[tuple[float, float]]] = defaultdict(list)
+
+    birth_points = _build_series_points(municipality_rows, 'birth_rate')
+    death_points = _build_series_points(municipality_rows, 'death_rate')
+    natural_points = _build_series_points(municipality_rows, 'natural_increase_rate')
+    natural_by_year = {year: value for year, value in natural_points}
+    if len(birth_points) < MIN_BACKTEST_TRAIN_SIZE or len(death_points) < MIN_BACKTEST_TRAIN_SIZE:
+        return {}
+
+    max_index = min(len(birth_points), len(death_points))
+    for train_end_index in range(MIN_BACKTEST_TRAIN_SIZE - 1, max_index - 1):
+        train_birth_points = birth_points[: train_end_index + 1]
+        train_death_points = death_points[: train_end_index + 1]
+        train_last_year = min(train_birth_points[-1][0], train_death_points[-1][0])
+
+        for horizon in range(1, max_horizon + 1):
+            target_year = train_last_year + horizon
+            actual_value = natural_by_year.get(target_year)
+            if actual_value is None:
+                continue
+            predicted_value = _forecast_natural_increase_sequence(
+                train_birth_points,
+                train_death_points,
+                global_models,
+                yearly_death_autoreg_models,
+                death_blend_weight,
+                target_year,
+            )
+            if predicted_value is None:
+                continue
+            errors_by_horizon[horizon].append((actual_value, predicted_value))
+
+    return {
+        horizon: _calculate_error_metrics(
+            [actual for actual, _ in pairs],
+            [predicted for _, predicted in pairs],
+        )
+        for horizon, pairs in errors_by_horizon.items()
+    }
+
+
+def _build_natural_interval_metrics(
+    grouped_rows: dict[int, list[dict[str, Any]]],
+    global_models: dict[str, SeriesModel],
+    yearly_death_autoreg_models: dict[int, AutoregModel],
+    death_blend_weight: float,
+    max_horizon: int = BACKTEST_HOLDOUT_POINTS,
+) -> dict[int, ErrorMetrics]:
+    errors_by_horizon: dict[int, list[tuple[float, float]]] = defaultdict(list)
+
+    for municipality_rows in grouped_rows.values():
+        municipality_metrics = _build_natural_interval_metrics_for_rows(
+            municipality_rows,
+            global_models,
+            yearly_death_autoreg_models,
+            death_blend_weight,
+            max_horizon=max_horizon,
+        )
+        for horizon, metrics in municipality_metrics.items():
+            if metrics.sample_size == 0 or metrics.rmse is None:
+                continue
+            errors_by_horizon[horizon].extend(
+                [(metrics.mae or 0.0, metrics.rmse)] * metrics.sample_size
+            )
+
+    return {
+        horizon: ErrorMetrics(
+            mae=_mean([mae for mae, _ in pairs]) if pairs else None,
+            rmse=math.sqrt(_mean([rmse ** 2 for _, rmse in pairs])) if pairs else None,
+            mape=None,
+            sample_size=len(pairs),
+        )
+        for horizon, pairs in errors_by_horizon.items()
+    }
+
+
 def train_model(
     csv_path: str | Path,
     *,
@@ -878,6 +1113,7 @@ def train_model(
         global_models,
         yearly_death_autoreg_models,
     )
+    interval_horizon_limit = max(1, end_year - start_year + 1)
     global_metric_collections: dict[str, list[ErrorMetrics]] = {
         metric_name: [] for metric_name in METRIC_SPECS
     }
@@ -890,6 +1126,7 @@ def train_model(
             'history_to_year': max(history_years),
             'series': {},
             'evaluation': {},
+            'prediction_intervals': {},
             'death_autoreg_history': _build_series_points(municipality_rows, 'death_rate')[-AUTOREG_LAGS:],
         }
 
@@ -912,18 +1149,54 @@ def train_model(
             metric_name: _serialize_error_metrics(evaluation)
             for metric_name, evaluation in municipality_evaluation.items()
         }
+        municipality_natural_interval_metrics = _build_natural_interval_metrics_for_rows(
+            municipality_rows,
+            global_models,
+            yearly_death_autoreg_models,
+            death_blend_weight,
+            max_horizon=interval_horizon_limit,
+        )
+        municipality_natural_interval_metrics = _expand_horizon_metrics(
+            municipality_natural_interval_metrics,
+            max_horizon=interval_horizon_limit,
+            fallback_metrics=municipality_evaluation['natural_increase_rate'],
+        )
+        municipality_payload['prediction_intervals']['natural_increase_rate'] = {
+            'level': NATURAL_INTERVAL_LEVEL,
+            'z_score': NATURAL_INTERVAL_Z_SCORE,
+            'width_multiplier': NATURAL_INTERVAL_WIDTH_MULTIPLIER,
+            'method': 'municipality-backtest-rmse-by-horizon',
+            'by_horizon': _serialize_horizon_error_metrics(municipality_natural_interval_metrics),
+            'fallback': municipality_payload['evaluation']['natural_increase_rate'],
+        }
         for metric_name, evaluation in municipality_evaluation.items():
             global_metric_collections[metric_name].append(evaluation)
         municipalities[str(municipality_id)] = municipality_payload
 
-    overall_evaluation = {
-        metric_name: _serialize_error_metrics(_merge_metric_collections(metric_collections))
+    overall_evaluation_raw = {
+        metric_name: _merge_metric_collections(metric_collections)
         for metric_name, metric_collections in global_metric_collections.items()
+    }
+    overall_evaluation = {
+        metric_name: _serialize_error_metrics(metrics)
+        for metric_name, metrics in overall_evaluation_raw.items()
     }
     overall_evaluation_summary = {
         metric_name: _build_metric_summary(metric_collections)
         for metric_name, metric_collections in global_metric_collections.items()
     }
+    natural_interval_metrics = _build_natural_interval_metrics(
+        grouped_rows,
+        global_models,
+        yearly_death_autoreg_models,
+        death_blend_weight,
+        max_horizon=interval_horizon_limit,
+    )
+    natural_interval_metrics = _expand_horizon_metrics(
+        natural_interval_metrics,
+        max_horizon=interval_horizon_limit,
+        fallback_metrics=overall_evaluation_raw['natural_increase_rate'],
+    )
 
     return {
         'model_name': MODEL_NAME,
@@ -934,6 +1207,16 @@ def train_model(
         'forecast_years': {'start': start_year, 'end': end_year},
         'evaluation': overall_evaluation,
         'evaluation_summary': overall_evaluation_summary,
+        'prediction_intervals': {
+            'natural_increase_rate': {
+                'level': NATURAL_INTERVAL_LEVEL,
+                'z_score': NATURAL_INTERVAL_Z_SCORE,
+                'width_multiplier': NATURAL_INTERVAL_WIDTH_MULTIPLIER,
+                'method': 'backtest-rmse-by-horizon',
+                'by_horizon': _serialize_horizon_error_metrics(natural_interval_metrics),
+                'fallback': overall_evaluation['natural_increase_rate'],
+            }
+        },
         'metrics': {
             metric_name: {
                 'transform': METRIC_SPECS[metric_name].transform,
@@ -951,18 +1234,35 @@ def train_model(
 
 
 def _build_interval_width(
-    birth_model: SeriesModel,
-    death_model: SeriesModel,
+    municipality_payload: dict[str, Any],
+    model_artifact: dict[str, Any],
     natural_model: SeriesModel,
     horizon: int,
 ) -> float:
-    base_error = math.sqrt(
-        birth_model.error ** 2
-        + death_model.error ** 2
-        + natural_model.error ** 2
-    )
-    volatility = max(natural_model.volatility, 1e-4) * math.sqrt(max(horizon, 1))
-    return base_error * (1.0 + 0.22 * max(horizon - 1, 0)) + volatility
+    interval_payload = municipality_payload.get('prediction_intervals', {}).get('natural_increase_rate', {})
+    horizon_metrics = interval_payload.get('by_horizon', {}).get(str(horizon), {})
+    rmse = horizon_metrics.get('rmse')
+    if isinstance(rmse, (int, float)) and rmse > 0:
+        z_score = interval_payload.get('z_score', NATURAL_INTERVAL_Z_SCORE)
+        width_multiplier = interval_payload.get('width_multiplier', NATURAL_INTERVAL_WIDTH_MULTIPLIER)
+        return float(width_multiplier) * float(z_score) * float(rmse)
+
+    fallback_metrics = interval_payload.get('fallback', {})
+    fallback_rmse = fallback_metrics.get('rmse')
+    if isinstance(fallback_rmse, (int, float)) and fallback_rmse > 0:
+        z_score = interval_payload.get('z_score', NATURAL_INTERVAL_Z_SCORE)
+        width_multiplier = interval_payload.get('width_multiplier', NATURAL_INTERVAL_WIDTH_MULTIPLIER)
+        return float(width_multiplier) * float(z_score) * float(fallback_rmse)
+
+    global_interval_payload = model_artifact.get('prediction_intervals', {}).get('natural_increase_rate', {})
+    global_horizon_metrics = global_interval_payload.get('by_horizon', {}).get(str(horizon), {})
+    global_rmse = global_horizon_metrics.get('rmse')
+    if isinstance(global_rmse, (int, float)) and global_rmse > 0:
+        z_score = global_interval_payload.get('z_score', NATURAL_INTERVAL_Z_SCORE)
+        width_multiplier = global_interval_payload.get('width_multiplier', NATURAL_INTERVAL_WIDTH_MULTIPLIER)
+        return float(width_multiplier) * float(z_score) * float(global_rmse)
+
+    return max(natural_model.volatility, 1e-4)
 
 
 def generate_predictions(
@@ -1031,10 +1331,10 @@ def generate_predictions(
                 death_autoreg_history = death_autoreg_history[-AUTOREG_LAGS:]
 
             interval_width = _build_interval_width(
-                birth_model=birth_model,
-                death_model=death_model,
-                natural_model=natural_model,
-                horizon=horizon,
+                municipality_payload,
+                model_artifact,
+                natural_model,
+                horizon,
             )
             interval_lower = _clip(
                 predicted_natural_increase_rate - interval_width,
@@ -1064,8 +1364,12 @@ def generate_predictions(
                         'natural_increase_rate': {
                             'lower': _round_metric('natural_increase_rate', interval_lower),
                             'upper': _round_metric('natural_increase_rate', interval_upper),
-                            'level': 0.8,
-                            'method': 'damped-trend-residual-band',
+                            'level': municipality_payload.get('prediction_intervals', {})
+                            .get('natural_increase_rate', {})
+                            .get('level', NATURAL_INTERVAL_LEVEL),
+                            'method': municipality_payload.get('prediction_intervals', {})
+                            .get('natural_increase_rate', {})
+                            .get('method', 'municipality-backtest-rmse-by-horizon'),
                         }
                     },
                     'metadata': {
