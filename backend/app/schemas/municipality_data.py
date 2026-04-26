@@ -8,7 +8,7 @@ class MunicipalityDataRead(BaseModel):
     population: int | None = None
     birth_rate: float | None = None
     death_rate: float | None = None
-    migration: int | None = None
+    migration: float | None = None
 
     model_config = {'from_attributes': True}
 

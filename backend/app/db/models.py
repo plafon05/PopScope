@@ -58,7 +58,7 @@ class MunicipalityData(Base):
     population: Mapped[int | None] = mapped_column(Integer, nullable=True)
     birth_rate: Mapped[float | None] = mapped_column(Numeric(8, 4), nullable=True)
     death_rate: Mapped[float | None] = mapped_column(Numeric(8, 4), nullable=True)
-    migration: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    migration: Mapped[float | None] = mapped_column(Numeric(10, 6), nullable=True)
 
     municipality: Mapped[Municipality] = relationship(back_populates='data_records')
 

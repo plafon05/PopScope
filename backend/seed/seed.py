@@ -18,6 +18,29 @@ SOURCE_DATA_PATH = SEEDS_DIR / "municipality_data.csv"
 PREDICTION_BATCH_SIZE = 1000
 
 
+def _normalize_optional(value: str | None) -> str | None:
+    if value is None:
+        return None
+    normalized = value.strip()
+    if not normalized or normalized.lower() in {"null", "none", "nan"}:
+        return None
+    return normalized.replace(",", ".")
+
+
+def _parse_optional_float(value: str | None) -> float | None:
+    normalized = _normalize_optional(value)
+    if normalized is None:
+        return None
+    return float(normalized)
+
+
+def _parse_optional_int(value: str | None) -> int | None:
+    parsed_float = _parse_optional_float(value)
+    if parsed_float is None:
+        return None
+    return int(parsed_float)
+
+
 async def seed_municipalities(session):
     result = await session.execute(select(Municipality).limit(1))
     if result.scalar():
@@ -32,7 +55,7 @@ async def seed_municipalities(session):
                 name=row["name"],
                 region=row["region"],
                 type=row["type"],
-                area=float(row["area"]) if row["area"] else None,
+                area=_parse_optional_float(row["area"]),
             )
             for row in reader
         ]
@@ -55,10 +78,10 @@ async def seed_municipality_data(session):
                 id=int(row["id"]),
                 municipality_id=int(row["municipality_id"]),
                 year=int(row["year"]),
-                population=int(row["population"]) if row["population"] else None,
-                birth_rate=float(row["birth_rate"]) if row["birth_rate"] else None,
-                death_rate=float(row["death_rate"]) if row["death_rate"] else None,
-                migration=int(row["migration"]) if row["migration"] else None,
+                population=_parse_optional_int(row["population"]),
+                birth_rate=_parse_optional_float(row["birth_rate"]),
+                death_rate=_parse_optional_float(row["death_rate"]),
+                migration=_parse_optional_float(row["migration"]),
             )
             for row in reader
         ]
