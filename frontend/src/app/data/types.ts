@@ -1,4 +1,4 @@
-export type MunicipalityType = 'city' | 'municipality';
+export type MunicipalityType = string;
 export type MetricUnitMode = 'per_thousand' | 'absolute';
 
 export interface MunicipalityRecord {

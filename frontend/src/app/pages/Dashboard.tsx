@@ -16,10 +16,16 @@ export function Dashboard() {
     error,
   } = useDemographyData();
 
+  const effectiveMinYear = Math.min(maxYear, Math.max(minYear, 2008));
+  const types = useMemo(
+    () => [...new Set(allData.map((d) => d.type))].sort((a, b) => a.localeCompare(b, 'ru')),
+    [allData],
+  );
+
   const [filters, setFilters] = useState<FilterState>({
     region: 'all',
     type: 'all',
-    yearFrom: minYear,
+    yearFrom: effectiveMinYear,
     yearTo: maxYear,
   });
   const [unitMode, setUnitMode] = useState<MetricUnitMode>('per_thousand');
@@ -27,11 +33,11 @@ export function Dashboard() {
   useEffect(() => {
     setFilters((prev) => ({
       ...prev,
-      yearFrom: minYear,
+      yearFrom: effectiveMinYear,
       yearTo: maxYear,
       region: prev.region === 'all' || regions.includes(prev.region) ? prev.region : 'all',
     }));
-  }, [minYear, maxYear, regions]);
+  }, [effectiveMinYear, maxYear, regions]);
 
   const filteredData = useMemo(() => {
     return allData.filter((d) => {
@@ -49,7 +55,8 @@ export function Dashboard() {
         filters={filters}
         onChange={setFilters}
         regions={regions}
-        minYear={minYear}
+        types={types}
+        minYear={effectiveMinYear}
         maxYear={maxYear}
       />
 

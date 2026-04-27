@@ -5,7 +5,7 @@ import {
   ResponsiveContainer, ReferenceLine,
 } from 'recharts';
 import { MunicipalityRecord } from '../data/types';
-import { TrendingUp, TrendingDown, Minus, AlertTriangle, ChevronDown } from 'lucide-react';
+import { TrendingUp, TrendingDown, Minus, ChevronDown } from 'lucide-react';
 import { useDemographyData } from '../data/DemographyProvider';
 import {
   fetchLatestPredictionRunId,
@@ -19,6 +19,21 @@ type MetricKey = 'population' | 'birthRate' | 'deathRate' | 'naturalGrowthPercen
 const HISTORICAL_YEARS = [2019, 2020, 2021, 2022, 2023];
 const FORECAST_START_YEAR = 2024;
 const FORECAST_MAX_YEAR = 2038;
+
+function isUrbanType(type: string): boolean {
+  return type.trim().toLowerCase().includes('город');
+}
+
+function shortTypeLabel(type: string): string {
+  const normalized = type.trim().toLowerCase();
+  if (normalized === 'городской округ') return 'ГО';
+  if (normalized === 'муниципальный район') return 'МР';
+  if (normalized === 'муниципальный округ') return 'МО';
+  if (normalized === 'город федерального значения') return 'ГФЗ';
+  if (normalized === 'административный район') return 'АР';
+  if (normalized === 'городской округ с внутригородским делением') return 'ГО-вгд';
+  return type;
+}
 
 const METRICS: { key: MetricKey; label: string; unit: string; color: string }[] = [
   { key: 'population',           label: 'Население',   unit: 'чел.',  color: '#3b82f6' },
@@ -129,8 +144,8 @@ function TrendCard({ name, region, type, currentVal, currentYear, forecastVal, m
           <p className="text-sm text-gray-800 truncate">{name}</p>
           <p className="text-[11px] text-gray-400 truncate">{region}</p>
         </div>
-        <span className={`text-[10px] px-1.5 py-0.5 rounded-full shrink-0 ${type === 'city' ? 'bg-blue-100 text-blue-600' : 'bg-purple-100 text-purple-600'}`}>
-          {type === 'city' ? 'ГО' : 'МР'}
+        <span className={`text-[10px] px-1.5 py-0.5 rounded-full shrink-0 ${isUrbanType(type) ? 'bg-blue-100 text-blue-600' : 'bg-purple-100 text-purple-600'}`}>
+          {shortTypeLabel(type)}
         </span>
       </div>
       <div className="flex items-center gap-1">
@@ -236,6 +251,10 @@ export function Forecasts() {
   const allYears        = useMemo(() => [...HISTORICAL_YEARS, ...forecastYears], [forecastYears]);
 
   const municipalities = useMemo(() => aggregateMunicipalities(allData), [allData]);
+  const typeOptions = useMemo(
+    () => [...new Set(municipalities.map((m) => m.type))].sort((a, b) => a.localeCompare(b, 'ru')),
+    [municipalities],
+  );
 
   useEffect(() => {
     let cancelled = false;
@@ -498,106 +517,107 @@ export function Forecasts() {
   );
 
   return (
-    <div className="max-w-[1600px] mx-auto px-6 py-5 space-y-5">
-      {/* Header */}
-      <div className="flex items-start justify-between flex-wrap gap-4">
-        <div>
-          <h2 className="text-gray-900">Прогнозы демографических показателей</h2>
-          <p className="text-sm text-gray-400 mt-0.5">
-            Прогнозы считаются моделью ML · горизонт: {forecastHorizon} лет (до {forecastEndYear})
-          </p>
-        </div>
-        <div className="flex items-center gap-2 px-3 py-2 bg-amber-50 border border-amber-200 rounded-lg text-xs text-amber-700">
-          <AlertTriangle size={14} />
-          Прогноз носит аналитический характер и не является управленческим решением
-        </div>
-      </div>
+    <div className="max-w-[1600px] mx-auto px-6 py-5 space-y-4">
+      {/* Header + Filters */}
+      <div className="space-y-3">
+        <h2 className="text-gray-900">Прогнозы демографических показателей</h2>
 
-      {/* Filters */}
-      <div className="bg-white border border-gray-200 rounded-xl px-5 py-4 flex flex-wrap items-end gap-5 shadow-sm">
-        {/* Metric */}
-        <div className="flex flex-col gap-1">
-          <label className="text-xs text-gray-500">Показатель</label>
-          <div className="flex gap-2 flex-wrap">
-            {METRICS.map((m) => (
-              <button
-                key={m.key}
-                onClick={() => setMetric(m.key)}
-                className={`px-3 py-2 rounded-lg text-sm transition-all border ${
-                  metric === m.key
-                    ? 'border-blue-600 bg-blue-600 text-white'
-                    : 'border-gray-200 bg-gray-50 text-gray-600 hover:bg-gray-100'
-                }`}
-              >{m.label}</button>
-            ))}
+        <div className="flex items-stretch gap-4">
+          <div className="w-fit max-w-full bg-white border border-gray-200 rounded-xl px-4 pt-2 pb-2.5 shadow-sm">
+            <div className="flex items-end gap-3 overflow-x-auto">
+            {/* Region */}
+            <div className="flex flex-col gap-1 w-[180px] shrink-0">
+              <label className="text-xs text-gray-500">Регион</label>
+              <div className="relative">
+                <select
+                  value={selectedRegion}
+                  onChange={(e) => { setSelectedRegion(e.target.value); setSelectedMunicipality('all'); }}
+                  className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm bg-gray-50 focus:outline-none focus:ring-0 focus:border-gray-200 appearance-none pr-8 text-gray-700"
+                >
+                  <option value="all">Все регионы</option>
+                  {regions.map((r) => <option key={r} value={r}>{r}</option>)}
+                </select>
+                <ChevronDown size={14} className="absolute right-2.5 top-1/2 -translate-y-1/2 text-gray-400 pointer-events-none" />
+              </div>
+            </div>
+
+            {/* Type */}
+            <div className="flex flex-col gap-1 w-[180px] shrink-0">
+              <label className="text-xs text-gray-500">Тип МО</label>
+              <div className="relative">
+                <select
+                  value={selectedType}
+                  onChange={(e) => { setSelectedType(e.target.value); setSelectedMunicipality('all'); }}
+                  className="w-full border border-gray-200 rounded-lg px-3 py-1.5 text-sm bg-gray-50 focus:outline-none focus:ring-0 focus:border-gray-200 appearance-none pr-8 text-gray-700"
+                >
+                  <option value="all">Все типы</option>
+                  {typeOptions.map((t) => <option key={t} value={t}>{t}</option>)}
+                </select>
+                <ChevronDown size={14} className="absolute right-2.5 top-1/2 -translate-y-1/2 text-gray-400 pointer-events-none" />
+              </div>
+            </div>
+
+            {/* Municipality */}
+            <div className="flex flex-col gap-1 w-[180px] shrink-0">
+              <label className="text-xs text-gray-500">МО (для графика)</label>
+              <div className="relative">
+                <select
+                  value={selectedMunicipality}
+                  onChange={(e) => setSelectedMunicipality(e.target.value)}
+                  className="w-full border border-gray-200 rounded-lg px-3 py-1.5 text-sm bg-gray-50 focus:outline-none focus:ring-0 focus:border-gray-200 appearance-none pr-8 text-gray-700"
+                >
+                  <option value="all">Топ-5 из выборки</option>
+                  {filteredBy2023Population.map((m) => <option key={m.id} value={m.id}>{m.name}</option>)}
+                </select>
+                <ChevronDown size={14} className="absolute right-2.5 top-1/2 -translate-y-1/2 text-gray-400 pointer-events-none" />
+              </div>
+            </div>
+
+            {/* Horizon */}
+            <div className="flex flex-col gap-1.5 w-[220px] shrink-0">
+              <label className="text-xs text-gray-500">
+                Горизонт: <span className="font-medium text-gray-700">{forecastHorizon} лет</span>
+              </label>
+              <div className="flex items-center gap-2">
+                <span className="text-xs text-gray-400">5</span>
+                <input
+                  type="range"
+                  min={5}
+                  max={15}
+                  value={forecastHorizon}
+                  onChange={(e) => setForecastHorizon(Number(e.target.value))}
+                  className="flex-1 accent-blue-600"
+                />
+                <span className="text-xs text-gray-400">15</span>
+              </div>
+            </div>
+
+            {/* Metric buttons */}
+            <div className="flex flex-col gap-0.5 shrink-0">
+              <label className="text-xs text-gray-500">Показатель</label>
+              <div className="flex gap-2 flex-nowrap">
+                {METRICS.map((m) => (
+                  <button
+                    key={m.key}
+                    onClick={() => setMetric(m.key)}
+                    className={`px-3 py-1.5 rounded-lg text-sm transition-all border whitespace-nowrap ${
+                      metric === m.key
+                        ? 'border-blue-600 bg-blue-600 text-white'
+                        : 'border-gray-200 bg-gray-50 text-gray-600 hover:bg-gray-100'
+                    }`}
+                  >{m.label}</button>
+                ))}
+              </div>
+            </div>
+            </div>
           </div>
-        </div>
 
-        {/* Forecast horizon slider */}
-        <div className="flex flex-col gap-1.5 min-w-[200px]">
-          <label className="text-xs text-gray-500">
-            Горизонт прогноза: <span className="font-medium text-gray-700">{forecastHorizon} лет (до {forecastEndYear})</span>
-          </label>
-          <div className="flex items-center gap-2">
-            <span className="text-xs text-gray-400">5</span>
-            <input
-              type="range"
-              min={5}
-              max={15}
-              value={forecastHorizon}
-              onChange={(e) => setForecastHorizon(Number(e.target.value))}
-              className="flex-1 accent-blue-600"
+          <div className="hidden xl:flex flex-1 items-center justify-center overflow-hidden">
+            <img
+              src="/images/empty-radar.gif"
+              alt="Иллюстрация прогноза"
+              className="h-21 w-auto object-contain opacity-90"
             />
-            <span className="text-xs text-gray-400">15</span>
-          </div>
-        </div>
-
-        {/* Region */}
-        <div className="flex flex-col gap-1 min-w-[180px]">
-          <label className="text-xs text-gray-500">Регион</label>
-          <div className="relative">
-            <select
-              value={selectedRegion}
-              onChange={(e) => { setSelectedRegion(e.target.value); setSelectedMunicipality('all'); }}
-              className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm bg-gray-50 focus:outline-none focus:ring-2 focus:ring-blue-500 appearance-none pr-8 text-gray-700"
-            >
-              <option value="all">Все регионы</option>
-              {regions.map((r) => <option key={r} value={r}>{r}</option>)}
-            </select>
-            <ChevronDown size={14} className="absolute right-2.5 top-1/2 -translate-y-1/2 text-gray-400 pointer-events-none" />
-          </div>
-        </div>
-
-        {/* Type */}
-        <div className="flex flex-col gap-1 min-w-[170px]">
-          <label className="text-xs text-gray-500">Тип МО</label>
-          <div className="relative">
-            <select
-              value={selectedType}
-              onChange={(e) => { setSelectedType(e.target.value); setSelectedMunicipality('all'); }}
-              className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm bg-gray-50 focus:outline-none focus:ring-2 focus:ring-blue-500 appearance-none pr-8 text-gray-700"
-            >
-              <option value="all">Все типы</option>
-              <option value="city">Городской округ</option>
-              <option value="municipality">Муниципальный район</option>
-            </select>
-            <ChevronDown size={14} className="absolute right-2.5 top-1/2 -translate-y-1/2 text-gray-400 pointer-events-none" />
-          </div>
-        </div>
-
-        {/* Municipality */}
-        <div className="flex flex-col gap-1 min-w-[220px]">
-          <label className="text-xs text-gray-500">МО (для графика)</label>
-          <div className="relative">
-            <select
-              value={selectedMunicipality}
-              onChange={(e) => setSelectedMunicipality(e.target.value)}
-              className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm bg-gray-50 focus:outline-none focus:ring-2 focus:ring-blue-500 appearance-none pr-8 text-gray-700"
-            >
-              <option value="all">Топ-5 из выборки</option>
-              {filteredBy2023Population.map((m) => <option key={m.id} value={m.id}>{m.name}</option>)}
-            </select>
-            <ChevronDown size={14} className="absolute right-2.5 top-1/2 -translate-y-1/2 text-gray-400 pointer-events-none" />
           </div>
         </div>
       </div>
@@ -624,7 +644,7 @@ export function Forecasts() {
       )}
 
       {/* Chart + Cards */}
-      <div className="grid grid-cols-1 xl:grid-cols-[1fr_340px] xl:h-[620px] gap-5">
+      <div className="grid grid-cols-[1fr_340px] h-[620px] gap-5">
         {/* Chart */}
         <div className="bg-white border border-gray-200 rounded-xl shadow-sm flex flex-col overflow-hidden h-full min-h-0">
           <div className="px-5 py-4 border-b border-gray-100">
@@ -885,7 +905,7 @@ export function Forecasts() {
               value={tableSearch}
               onChange={(e) => setTableSearch(e.target.value)}
               placeholder="Поиск: МО или регион"
-              className="w-[240px] max-w-full border border-gray-200 rounded-lg px-3 py-1.5 text-sm bg-gray-50 focus:outline-none focus:ring-2 focus:ring-blue-500 text-gray-700"
+              className="w-[240px] max-w-full border border-gray-200 rounded-lg px-3 py-1.5 text-sm bg-gray-50 focus:outline-none focus:ring-0 focus:border-gray-200 text-gray-700"
             />
             <div className="text-xs text-gray-400 whitespace-nowrap">
               Найдено: {tableFiltered.length}

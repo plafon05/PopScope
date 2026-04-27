@@ -60,6 +60,21 @@ function getNaturalGrowthStyle(value: number) {
   return { row: 'bg-red-50 hover:bg-red-100', badge: 'bg-red-100 text-red-700 border border-red-200' };
 }
 
+function isUrbanType(type: string): boolean {
+  return type.trim().toLowerCase().includes('город');
+}
+
+function shortTypeLabel(type: string): string {
+  const normalized = type.trim().toLowerCase();
+  if (normalized === 'городской округ') return 'ГО';
+  if (normalized === 'муниципальный район') return 'МР';
+  if (normalized === 'муниципальный округ') return 'МО';
+  if (normalized === 'город федерального значения') return 'ГФЗ';
+  if (normalized === 'административный район') return 'АР';
+  if (normalized === 'городской округ с внутригородским делением') return 'ГО-вгд';
+  return type;
+}
+
 export function MunicipalityTable({ data, unitMode }: MunicipalityTableProps) {
   const [sortField, setSortField] = useState<SortField>('naturalGrowthPercent');
   const [sortDir, setSortDir] = useState<SortDir>('desc');
@@ -153,8 +168,8 @@ export function MunicipalityTable({ data, unitMode }: MunicipalityTableProps) {
                   <td className="px-3 py-2.5 pl-4 font-medium text-gray-800 whitespace-nowrap">{row.name}</td>
                   <td className="px-3 py-2.5 text-gray-500 text-xs whitespace-nowrap">{row.region}</td>
                   <td className="px-3 py-2.5 whitespace-nowrap">
-                    <span className={`text-xs px-2 py-0.5 rounded-full ${row.type === 'city' ? 'bg-blue-100 text-blue-600' : 'bg-purple-100 text-purple-600'}`}>
-                      {row.type === 'city' ? 'ГО' : 'МР'}
+                    <span className={`text-xs px-2 py-0.5 rounded-full ${isUrbanType(row.type) ? 'bg-blue-100 text-blue-600' : 'bg-purple-100 text-purple-600'}`}>
+                      {shortTypeLabel(row.type)}
                     </span>
                   </td>
                   <td className="px-3 py-2.5 text-gray-700 whitespace-nowrap">{formatPopulation(row.population)}</td>

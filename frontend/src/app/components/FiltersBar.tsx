@@ -10,12 +10,13 @@ export interface FilterState {
 interface FiltersBarProps {
   filters: FilterState;
   regions: string[];
+  types: string[];
   minYear: number;
   maxYear: number;
   onChange: (filters: FilterState) => void;
 }
 
-export function FiltersBar({ filters, regions, minYear, maxYear, onChange }: FiltersBarProps) {
+export function FiltersBar({ filters, regions, types, minYear, maxYear, onChange }: FiltersBarProps) {
   const yearOptions = Array.from({ length: maxYear - minYear + 1 }, (_, i) => minYear + i);
   const handleReset = () => {
     onChange({ region: 'all', type: 'all', yearFrom: minYear, yearTo: maxYear });
@@ -56,8 +57,9 @@ export function FiltersBar({ filters, regions, minYear, maxYear, onChange }: Fil
           className="border border-gray-200 rounded-lg px-3 py-2 text-sm bg-gray-50 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500 text-gray-700"
         >
           <option value="all">Все типы</option>
-          <option value="city">Городской округ</option>
-          <option value="municipality">Муниципальный район</option>
+          {types.map((t) => (
+            <option key={t} value={t}>{t}</option>
+          ))}
         </select>
       </div>
 
@@ -110,7 +112,7 @@ export function FiltersBar({ filters, regions, minYear, maxYear, onChange }: Fil
         )}
         {filters.type !== 'all' && (
           <span className="inline-flex items-center gap-1 px-2.5 py-1 rounded-full bg-indigo-100 text-indigo-700 text-xs">
-            {filters.type === 'city' ? 'Городской округ' : 'Муниципальный район'}
+            {filters.type}
             <button onClick={() => onChange({ ...filters, type: 'all' })}>
               <X size={11} />
             </button>
