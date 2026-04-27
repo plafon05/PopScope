@@ -103,6 +103,44 @@ function getPredictionMetricValue(point: PredictionPoint, metric: MetricKey): nu
   return point.naturalGrowthPercent;
 }
 
+function getPredictionMetricConfidence(
+  point: PredictionPoint,
+  metric: MetricKey,
+): { lower: number; upper: number } | null {
+  if (
+    metric === 'population' &&
+    point.confidenceLowerPopulation !== null &&
+    point.confidenceUpperPopulation !== null
+  ) {
+    return { lower: point.confidenceLowerPopulation, upper: point.confidenceUpperPopulation };
+  }
+  if (
+    metric === 'birthRate' &&
+    point.confidenceLowerBirthRate !== null &&
+    point.confidenceUpperBirthRate !== null
+  ) {
+    return { lower: point.confidenceLowerBirthRate, upper: point.confidenceUpperBirthRate };
+  }
+  if (
+    metric === 'deathRate' &&
+    point.confidenceLowerDeathRate !== null &&
+    point.confidenceUpperDeathRate !== null
+  ) {
+    return { lower: point.confidenceLowerDeathRate, upper: point.confidenceUpperDeathRate };
+  }
+  if (
+    metric === 'naturalGrowthPercent' &&
+    point.confidenceLowerNaturalGrowthPercent !== null &&
+    point.confidenceUpperNaturalGrowthPercent !== null
+  ) {
+    return {
+      lower: point.confidenceLowerNaturalGrowthPercent,
+      upper: point.confidenceUpperNaturalGrowthPercent,
+    };
+  }
+  return null;
+}
+
 function isObservedForMetric(record: MunicipalityRecord, metric: MetricKey): boolean {
   if (metric === 'population') return record.populationObserved;
   if (metric === 'birthRate') return record.birthRateObserved;
@@ -360,16 +398,13 @@ export function Forecasts() {
     const predictionValue = prediction ? getPredictionMetricValue(prediction, selectedMetric) : null;
     if (predictionValue !== null) {
       const normalizedMlValue = normalizeForecastValue(selectedMetric, predictionValue);
-      const hasMlBand =
-        selectedMetric === 'naturalGrowthPercent' &&
-        prediction.confidenceLowerNaturalGrowthPercent !== null &&
-        prediction.confidenceUpperNaturalGrowthPercent !== null;
-      if (hasMlBand) {
+      const confidenceBand = getPredictionMetricConfidence(prediction, selectedMetric);
+      if (confidenceBand !== null) {
         return {
           value: normalizedMlValue,
           source: 'ml',
-          confidenceLower: prediction.confidenceLowerNaturalGrowthPercent!,
-          confidenceUpper: prediction.confidenceUpperNaturalGrowthPercent!,
+          confidenceLower: confidenceBand.lower,
+          confidenceUpper: confidenceBand.upper,
         };
       }
       return { value: normalizedMlValue, source: 'ml' };

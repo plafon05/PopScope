@@ -28,6 +28,7 @@ NATURAL_INTERVAL_LEVEL = 0.68
 NATURAL_INTERVAL_WIDTH_MULTIPLIER = 0.8
 NATURAL_INTERVAL_MIN_SAMPLE_SIZE = 3
 NATURAL_INTERVAL_BLEND_SAMPLE_SIZE = 6
+POPULATION_INTERVAL_MIN_RELATIVE_WIDTH = 0.02  # 2% of predicted value
 
 
 @dataclass(frozen=True)
@@ -956,6 +957,99 @@ def _merge_metric_collections(
     return ErrorMetrics(mae=mae, rmse=rmse, mape=mape, sample_size=sample_size)
 
 
+def _build_metric_interval_metrics_for_rows(
+    municipality_rows: list[dict[str, Any]],
+    metric_name: str,
+    global_models: dict[str, SeriesModel],
+    yearly_death_autoreg_models: dict[int, AutoregModel],
+    death_blend_weight: float,
+    max_horizon: int = BACKTEST_HOLDOUT_POINTS,
+) -> dict[int, ErrorMetrics]:
+    points = _build_series_points(municipality_rows, metric_name)
+    if len(points) < MIN_BACKTEST_TRAIN_SIZE:
+        return {}
+
+    actual_by_year = {year: value for year, value in points}
+    errors_by_horizon: dict[int, list[tuple[float, float]]] = defaultdict(list)
+    spec = METRIC_SPECS[metric_name]
+
+    for train_end_index in range(MIN_BACKTEST_TRAIN_SIZE - 1, len(points) - 1):
+        train_points = points[: train_end_index + 1]
+        train_last_year = train_points[-1][0]
+        local_model = _fit_series_model(train_points, spec, global_models[metric_name])
+
+        for horizon in range(1, max_horizon + 1):
+            target_year = train_last_year + horizon
+            actual_value = actual_by_year.get(target_year)
+            if actual_value is None:
+                continue
+
+            predicted_value = _forecast_from_model(local_model, spec, target_year)
+            if metric_name == 'death_rate':
+                autoreg_model = yearly_death_autoreg_models.get(target_year)
+                if (
+                    autoreg_model is not None
+                    and len(train_points) >= AUTOREG_LAGS
+                    and _has_consecutive_history(train_points[-AUTOREG_LAGS:])
+                ):
+                    autoreg_prediction = _forecast_death_autoreg_sequence(
+                        train_points[-AUTOREG_LAGS:],
+                        autoreg_model,
+                        target_year,
+                    )
+                    predicted_value = _clip(
+                        (1.0 - death_blend_weight) * predicted_value
+                        + death_blend_weight * autoreg_prediction,
+                        METRIC_SPECS['death_rate'],
+                    )
+            errors_by_horizon[horizon].append((actual_value, predicted_value))
+
+    return {
+        horizon: _calculate_error_metrics(
+            [actual for actual, _ in pairs],
+            [predicted for _, predicted in pairs],
+        )
+        for horizon, pairs in errors_by_horizon.items()
+    }
+
+
+def _build_metric_interval_metrics(
+    grouped_rows: dict[int, list[dict[str, Any]]],
+    metric_name: str,
+    global_models: dict[str, SeriesModel],
+    yearly_death_autoreg_models: dict[int, AutoregModel],
+    death_blend_weight: float,
+    max_horizon: int = BACKTEST_HOLDOUT_POINTS,
+) -> dict[int, ErrorMetrics]:
+    errors_by_horizon: dict[int, list[tuple[float, float]]] = defaultdict(list)
+
+    for municipality_rows in grouped_rows.values():
+        municipality_metrics = _build_metric_interval_metrics_for_rows(
+            municipality_rows,
+            metric_name,
+            global_models,
+            yearly_death_autoreg_models,
+            death_blend_weight,
+            max_horizon=max_horizon,
+        )
+        for horizon, metrics in municipality_metrics.items():
+            if metrics.sample_size == 0 or metrics.rmse is None:
+                continue
+            errors_by_horizon[horizon].extend(
+                [(metrics.mae or 0.0, metrics.rmse)] * metrics.sample_size
+            )
+
+    return {
+        horizon: ErrorMetrics(
+            mae=_mean([mae for mae, _ in pairs]) if pairs else None,
+            rmse=math.sqrt(_mean([rmse ** 2 for _, rmse in pairs])) if pairs else None,
+            mape=None,
+            sample_size=len(pairs),
+        )
+        for horizon, pairs in errors_by_horizon.items()
+    }
+
+
 def _forecast_natural_increase_sequence(
     birth_points: list[tuple[int, float]],
     death_points: list[tuple[int, float]],
@@ -1149,6 +1243,28 @@ def train_model(
             metric_name: _serialize_error_metrics(evaluation)
             for metric_name, evaluation in municipality_evaluation.items()
         }
+        for metric_name in ('population', 'birth_rate', 'death_rate'):
+            municipality_metric_interval_metrics = _build_metric_interval_metrics_for_rows(
+                municipality_rows,
+                metric_name,
+                global_models,
+                yearly_death_autoreg_models,
+                death_blend_weight,
+                max_horizon=interval_horizon_limit,
+            )
+            municipality_metric_interval_metrics = _expand_horizon_metrics(
+                municipality_metric_interval_metrics,
+                max_horizon=interval_horizon_limit,
+                fallback_metrics=municipality_evaluation[metric_name],
+            )
+            municipality_payload['prediction_intervals'][metric_name] = {
+                'level': NATURAL_INTERVAL_LEVEL,
+                'z_score': NATURAL_INTERVAL_Z_SCORE,
+                'width_multiplier': NATURAL_INTERVAL_WIDTH_MULTIPLIER,
+                'method': 'municipality-backtest-rmse-by-horizon',
+                'by_horizon': _serialize_horizon_error_metrics(municipality_metric_interval_metrics),
+                'fallback': municipality_payload['evaluation'][metric_name],
+            }
         municipality_natural_interval_metrics = _build_natural_interval_metrics_for_rows(
             municipality_rows,
             global_models,
@@ -1197,6 +1313,42 @@ def train_model(
         max_horizon=interval_horizon_limit,
         fallback_metrics=overall_evaluation_raw['natural_increase_rate'],
     )
+    population_interval_metrics = _expand_horizon_metrics(
+        _build_metric_interval_metrics(
+            grouped_rows,
+            'population',
+            global_models,
+            yearly_death_autoreg_models,
+            death_blend_weight,
+            max_horizon=interval_horizon_limit,
+        ),
+        max_horizon=interval_horizon_limit,
+        fallback_metrics=overall_evaluation_raw['population'],
+    )
+    birth_interval_metrics = _expand_horizon_metrics(
+        _build_metric_interval_metrics(
+            grouped_rows,
+            'birth_rate',
+            global_models,
+            yearly_death_autoreg_models,
+            death_blend_weight,
+            max_horizon=interval_horizon_limit,
+        ),
+        max_horizon=interval_horizon_limit,
+        fallback_metrics=overall_evaluation_raw['birth_rate'],
+    )
+    death_interval_metrics = _expand_horizon_metrics(
+        _build_metric_interval_metrics(
+            grouped_rows,
+            'death_rate',
+            global_models,
+            yearly_death_autoreg_models,
+            death_blend_weight,
+            max_horizon=interval_horizon_limit,
+        ),
+        max_horizon=interval_horizon_limit,
+        fallback_metrics=overall_evaluation_raw['death_rate'],
+    )
 
     return {
         'model_name': MODEL_NAME,
@@ -1208,6 +1360,30 @@ def train_model(
         'evaluation': overall_evaluation,
         'evaluation_summary': overall_evaluation_summary,
         'prediction_intervals': {
+            'population': {
+                'level': NATURAL_INTERVAL_LEVEL,
+                'z_score': NATURAL_INTERVAL_Z_SCORE,
+                'width_multiplier': NATURAL_INTERVAL_WIDTH_MULTIPLIER,
+                'method': 'backtest-rmse-by-horizon',
+                'by_horizon': _serialize_horizon_error_metrics(population_interval_metrics),
+                'fallback': overall_evaluation['population'],
+            },
+            'birth_rate': {
+                'level': NATURAL_INTERVAL_LEVEL,
+                'z_score': NATURAL_INTERVAL_Z_SCORE,
+                'width_multiplier': NATURAL_INTERVAL_WIDTH_MULTIPLIER,
+                'method': 'backtest-rmse-by-horizon',
+                'by_horizon': _serialize_horizon_error_metrics(birth_interval_metrics),
+                'fallback': overall_evaluation['birth_rate'],
+            },
+            'death_rate': {
+                'level': NATURAL_INTERVAL_LEVEL,
+                'z_score': NATURAL_INTERVAL_Z_SCORE,
+                'width_multiplier': NATURAL_INTERVAL_WIDTH_MULTIPLIER,
+                'method': 'backtest-rmse-by-horizon',
+                'by_horizon': _serialize_horizon_error_metrics(death_interval_metrics),
+                'fallback': overall_evaluation['death_rate'],
+            },
             'natural_increase_rate': {
                 'level': NATURAL_INTERVAL_LEVEL,
                 'z_score': NATURAL_INTERVAL_Z_SCORE,
@@ -1234,35 +1410,46 @@ def train_model(
 
 
 def _build_interval_width(
+    metric_name: str,
     municipality_payload: dict[str, Any],
     model_artifact: dict[str, Any],
-    natural_model: SeriesModel,
+    metric_model: SeriesModel,
     horizon: int,
+    predicted_value: float,
 ) -> float:
-    interval_payload = municipality_payload.get('prediction_intervals', {}).get('natural_increase_rate', {})
+    def _apply_population_floor(width: float) -> float:
+        if metric_name != 'population':
+            return width
+        relative_floor = abs(predicted_value) * POPULATION_INTERVAL_MIN_RELATIVE_WIDTH
+        return max(width, relative_floor, 1.0)
+
+    interval_payload = municipality_payload.get('prediction_intervals', {}).get(metric_name, {})
     horizon_metrics = interval_payload.get('by_horizon', {}).get(str(horizon), {})
     rmse = horizon_metrics.get('rmse')
     if isinstance(rmse, (int, float)) and rmse > 0:
         z_score = interval_payload.get('z_score', NATURAL_INTERVAL_Z_SCORE)
         width_multiplier = interval_payload.get('width_multiplier', NATURAL_INTERVAL_WIDTH_MULTIPLIER)
-        return float(width_multiplier) * float(z_score) * float(rmse)
+        width = float(width_multiplier) * float(z_score) * float(rmse)
+        return _apply_population_floor(width)
 
     fallback_metrics = interval_payload.get('fallback', {})
     fallback_rmse = fallback_metrics.get('rmse')
     if isinstance(fallback_rmse, (int, float)) and fallback_rmse > 0:
         z_score = interval_payload.get('z_score', NATURAL_INTERVAL_Z_SCORE)
         width_multiplier = interval_payload.get('width_multiplier', NATURAL_INTERVAL_WIDTH_MULTIPLIER)
-        return float(width_multiplier) * float(z_score) * float(fallback_rmse)
+        width = float(width_multiplier) * float(z_score) * float(fallback_rmse)
+        return _apply_population_floor(width)
 
-    global_interval_payload = model_artifact.get('prediction_intervals', {}).get('natural_increase_rate', {})
+    global_interval_payload = model_artifact.get('prediction_intervals', {}).get(metric_name, {})
     global_horizon_metrics = global_interval_payload.get('by_horizon', {}).get(str(horizon), {})
     global_rmse = global_horizon_metrics.get('rmse')
     if isinstance(global_rmse, (int, float)) and global_rmse > 0:
         z_score = global_interval_payload.get('z_score', NATURAL_INTERVAL_Z_SCORE)
         width_multiplier = global_interval_payload.get('width_multiplier', NATURAL_INTERVAL_WIDTH_MULTIPLIER)
-        return float(width_multiplier) * float(z_score) * float(global_rmse)
+        width = float(width_multiplier) * float(z_score) * float(global_rmse)
+        return _apply_population_floor(width)
 
-    return max(natural_model.volatility, 1e-4)
+    return _apply_population_floor(max(metric_model.volatility, 1e-4))
 
 
 def generate_predictions(
@@ -1330,19 +1517,83 @@ def generate_predictions(
                 death_autoreg_history.append((target_year, predicted_death_rate))
                 death_autoreg_history = death_autoreg_history[-AUTOREG_LAGS:]
 
-            interval_width = _build_interval_width(
+            population_interval_width = _build_interval_width(
+                'population',
+                municipality_payload,
+                model_artifact,
+                population_model,
+                horizon,
+                predicted_population,
+            )
+            birth_interval_width = _build_interval_width(
+                'birth_rate',
+                municipality_payload,
+                model_artifact,
+                birth_model,
+                horizon,
+                predicted_birth_rate,
+            )
+            death_interval_width = _build_interval_width(
+                'death_rate',
+                municipality_payload,
+                model_artifact,
+                death_model,
+                horizon,
+                predicted_death_rate,
+            )
+            natural_interval_width = _build_interval_width(
+                'natural_increase_rate',
                 municipality_payload,
                 model_artifact,
                 natural_model,
                 horizon,
+                predicted_natural_increase_rate,
             )
-            interval_lower = _clip(
-                predicted_natural_increase_rate - interval_width,
+
+            population_interval_lower = _clip(
+                predicted_population - population_interval_width,
+                METRIC_SPECS['population'],
+            )
+            population_interval_upper = _clip(
+                predicted_population + population_interval_width,
+                METRIC_SPECS['population'],
+            )
+            birth_interval_lower = _clip(
+                predicted_birth_rate - birth_interval_width,
+                METRIC_SPECS['birth_rate'],
+            )
+            birth_interval_upper = _clip(
+                predicted_birth_rate + birth_interval_width,
+                METRIC_SPECS['birth_rate'],
+            )
+            death_interval_lower = _clip(
+                predicted_death_rate - death_interval_width,
+                METRIC_SPECS['death_rate'],
+            )
+            death_interval_upper = _clip(
+                predicted_death_rate + death_interval_width,
+                METRIC_SPECS['death_rate'],
+            )
+            natural_interval_lower = _clip(
+                predicted_natural_increase_rate - natural_interval_width,
                 METRIC_SPECS['natural_increase_rate'],
             )
-            interval_upper = _clip(
-                predicted_natural_increase_rate + interval_width,
+            natural_interval_upper = _clip(
+                predicted_natural_increase_rate + natural_interval_width,
                 METRIC_SPECS['natural_increase_rate'],
+            )
+
+            population_interval_config = (
+                municipality_payload.get('prediction_intervals', {}).get('population', {})
+            )
+            birth_interval_config = (
+                municipality_payload.get('prediction_intervals', {}).get('birth_rate', {})
+            )
+            death_interval_config = (
+                municipality_payload.get('prediction_intervals', {}).get('death_rate', {})
+            )
+            natural_interval_config = (
+                municipality_payload.get('prediction_intervals', {}).get('natural_increase_rate', {})
             )
 
             predictions.append(
@@ -1361,15 +1612,29 @@ def generate_predictions(
                     ),
                     'predicted_migration': None,
                     'confidence': {
+                        'population': {
+                            'lower': _round_metric('population', population_interval_lower),
+                            'upper': _round_metric('population', population_interval_upper),
+                            'level': population_interval_config.get('level', NATURAL_INTERVAL_LEVEL),
+                            'method': population_interval_config.get('method', 'municipality-backtest-rmse-by-horizon'),
+                        },
+                        'birth_rate': {
+                            'lower': _round_metric('birth_rate', birth_interval_lower),
+                            'upper': _round_metric('birth_rate', birth_interval_upper),
+                            'level': birth_interval_config.get('level', NATURAL_INTERVAL_LEVEL),
+                            'method': birth_interval_config.get('method', 'municipality-backtest-rmse-by-horizon'),
+                        },
+                        'death_rate': {
+                            'lower': _round_metric('death_rate', death_interval_lower),
+                            'upper': _round_metric('death_rate', death_interval_upper),
+                            'level': death_interval_config.get('level', NATURAL_INTERVAL_LEVEL),
+                            'method': death_interval_config.get('method', 'municipality-backtest-rmse-by-horizon'),
+                        },
                         'natural_increase_rate': {
-                            'lower': _round_metric('natural_increase_rate', interval_lower),
-                            'upper': _round_metric('natural_increase_rate', interval_upper),
-                            'level': municipality_payload.get('prediction_intervals', {})
-                            .get('natural_increase_rate', {})
-                            .get('level', NATURAL_INTERVAL_LEVEL),
-                            'method': municipality_payload.get('prediction_intervals', {})
-                            .get('natural_increase_rate', {})
-                            .get('method', 'municipality-backtest-rmse-by-horizon'),
+                            'lower': _round_metric('natural_increase_rate', natural_interval_lower),
+                            'upper': _round_metric('natural_increase_rate', natural_interval_upper),
+                            'level': natural_interval_config.get('level', NATURAL_INTERVAL_LEVEL),
+                            'method': natural_interval_config.get('method', 'municipality-backtest-rmse-by-horizon'),
                         }
                     },
                     'metadata': {

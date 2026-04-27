@@ -9,12 +9,25 @@ interface PredictionItem {
   predicted_death_rate: number | null;
   predicted_natural_increase_rate: number | null;
   confidence: {
+    population?: {
+      lower?: number;
+      upper?: number;
+    };
+    birth_rate?: {
+      lower?: number;
+      upper?: number;
+    };
+    death_rate?: {
+      lower?: number;
+      upper?: number;
+    };
     natural_increase_rate?: {
       lower?: number;
       upper?: number;
     };
   } | null;
   metadata?: {
+    quality_metrics?: Record<string, { mae?: number; rmse?: number; mape?: number }>;
     overall_quality_metrics?: Record<string, { mae?: number; rmse?: number; mape?: number }>;
   } | null;
 }
@@ -36,6 +49,12 @@ export interface PredictionPoint {
   birthRate: number | null;
   deathRate: number | null;
   naturalGrowthPercent: number | null;
+  confidenceLowerPopulation: number | null;
+  confidenceUpperPopulation: number | null;
+  confidenceLowerBirthRate: number | null;
+  confidenceUpperBirthRate: number | null;
+  confidenceLowerDeathRate: number | null;
+  confidenceUpperDeathRate: number | null;
   confidenceLowerNaturalGrowthPercent: number | null;
   confidenceUpperNaturalGrowthPercent: number | null;
 }
@@ -70,6 +89,12 @@ function mapPredictionItem(item: PredictionItem): PredictionPoint {
     birthRate: toPerThousand(item.predicted_birth_rate),
     deathRate: toPerThousand(item.predicted_death_rate),
     naturalGrowthPercent: toNaturalGrowthPercent(item.predicted_natural_increase_rate),
+    confidenceLowerPopulation: item.confidence?.population?.lower ?? null,
+    confidenceUpperPopulation: item.confidence?.population?.upper ?? null,
+    confidenceLowerBirthRate: toPerThousand(item.confidence?.birth_rate?.lower ?? null),
+    confidenceUpperBirthRate: toPerThousand(item.confidence?.birth_rate?.upper ?? null),
+    confidenceLowerDeathRate: toPerThousand(item.confidence?.death_rate?.lower ?? null),
+    confidenceUpperDeathRate: toPerThousand(item.confidence?.death_rate?.upper ?? null),
     confidenceLowerNaturalGrowthPercent: toNaturalGrowthPercent(
       item.confidence?.natural_increase_rate?.lower ?? null,
     ),

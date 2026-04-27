@@ -40,6 +40,32 @@ def test_natural_increase_interval_wraps_central_forecast() -> None:
         assert band['lower'] <= prediction['predicted_natural_increase_rate'] <= band['upper']
 
 
+def test_all_primary_metrics_have_confidence_intervals() -> None:
+    data_path = Path(__file__).resolve().parents[2] / 'seed' / 'municipality_data.csv'
+    artifact = train_model(data_path, start_year=2024, end_year=2024, model_run_id='test-run')
+    prediction = generate_predictions(
+        artifact,
+        municipality_id=4601000,
+        start_year=2024,
+        end_year=2024,
+    )[0]
+
+    confidence = prediction['confidence']
+    assert 'population' in confidence
+    assert 'birth_rate' in confidence
+    assert 'death_rate' in confidence
+    assert 'natural_increase_rate' in confidence
+
+    assert confidence['population']['lower'] <= prediction['predicted_population'] <= confidence['population']['upper']
+    assert confidence['birth_rate']['lower'] <= prediction['predicted_birth_rate'] <= confidence['birth_rate']['upper']
+    assert confidence['death_rate']['lower'] <= prediction['predicted_death_rate'] <= confidence['death_rate']['upper']
+    assert (
+        confidence['natural_increase_rate']['lower']
+        <= prediction['predicted_natural_increase_rate']
+        <= confidence['natural_increase_rate']['upper']
+    )
+
+
 def test_quality_metrics_are_serialized_for_frontend() -> None:
     data_path = Path(__file__).resolve().parents[2] / 'seed' / 'municipality_data.csv'
     artifact = train_model(data_path, start_year=2024, end_year=2024, model_run_id='test-run')
