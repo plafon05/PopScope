@@ -139,7 +139,32 @@ curl -s "http://localhost:8000/api/v1/predictions?limit=1&offset=0"
 ```
 Смотрите поле `model_run_id`.
 
-## 9. Тесты
+## 9. Нужно изменить метод генерации отчетов
+
+### Правишь .env
+Если нужна LLM
+```bash
+REPORT_USE_LLM=true
+LLM_PROVIDER=gigachat
++ GIGACHAT_* переменные
+```
+Если нужно программно
+```bash
+REPORT_USE_LLM=false
+LLM_PROVIDER=stub
+```
+### Пересоздаёшь backend, чтобы он перечитал env
+```bash
+docker compose up -d --force-recreate backend
+```
+### Проверяешь генерацию отчёта
+```bash
+curl -s -X POST "http://localhost:8000/api/v1/reports/analytics" \
+  -H "Content-Type: application/json" \
+  -d '{"year_from":2019,"year_to":2023}' | jq '.provider,.model_name'
+```
+
+## 10. Тесты
 
 Backend unit:
 ```bash
@@ -156,29 +181,22 @@ pytest backend/tests/api/test_predictions_api.py
 docker compose exec -T backend pytest
 ```
 
-## 10. Частые проблемы
+## 11. Частые проблемы
 
-### 10.1 `data-import` пишет: `Прогнозы уже загружены, пропускаем`
+### 11.1 `data-import` пишет: `Прогнозы уже загружены, пропускаем`
 Это штатное поведение. Используйте сценарий из раздела 8.
 
-### 10.2 `permission denied while trying to connect to the docker API`
+### 11.2 `permission denied while trying to connect to the docker API`
 Проверьте, что Docker Desktop запущен и текущий пользователь имеет доступ к Docker socket.
 
-### 10.3 Нужно сбросить всё состояние
+### 11.3 Нужно сбросить всё состояние
 ```bash
 docker compose down -v
 ```
 Это удалит данные Postgres volume.
 
-### 10.4 Нужно пересоздать контейнер
+### 11.4 Нужно пересоздать контейнер
 ```bash
 docker compose up -d --force-recreate --no-deps backend
-```
-
-### 10.5 Нужно проверить метод генерации отчетов
-```bash
-curl -s -X POST "http://localhost:8000/api/v1/reports/analytics" \
-  -H "Content-Type: application/json" \
-  -d '{"year_from":2019,"year_to":2023}' | jq '.provider,.model_name'
 ```
 
