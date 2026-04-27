@@ -11,7 +11,7 @@ cp .env.example .env
 # Backend + БД
 docker compose up -d db backend
 
-# Импорт данных и прогнозов
+# Импорт данных и прогнозов 
 docker compose --profile data-seed run --rm data-import
 ```
 

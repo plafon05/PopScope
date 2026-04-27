@@ -126,9 +126,13 @@ docker compose down -v
 ```bash
 docker compose exec -T db sh -lc 'psql -U "$POSTGRES_USER" -d "$POSTGRES_DB" -c "TRUNCATE TABLE municipality_predictions RESTART IDENTITY;"'
 docker compose exec -T backend sh -lc 'rm -f /app/ml/model.json /app/ml/predictions_2024_2038.json'
+
+Еслли нужно очистить и дугие даблицы БД:
+docker compose exec -T db sh -lc 'psql -U "$POSTGRES_USER" -d "$POSTGRES_DB" -c "TRUNCATE TABLE municipality_data RESTART IDENTITY CASCADE;"'
+docker compose exec -T db sh -lc 'psql -U "$POSTGRES_USER" -d "$POSTGRES_DB" -c "TRUNCATE TABLE municipalities RESTART IDENTITY CASCADE;"'
+
 docker compose --profile data-seed run --rm data-import
 ```
-
 Проверка нового run:
 ```bash
 curl -s "http://localhost:8000/api/v1/predictions?limit=1&offset=0"
@@ -160,14 +164,21 @@ docker compose exec -T backend pytest
 ### 10.2 `permission denied while trying to connect to the docker API`
 Проверьте, что Docker Desktop запущен и текущий пользователь имеет доступ к Docker socket.
 
-### 10.3 Backend не поднимается после изменений
-Посмотрите логи:
-```bash
-docker compose logs --tail=200 backend
-```
-
-### 10.4 Нужно сбросить всё состояние
+### 10.3 Нужно сбросить всё состояние
 ```bash
 docker compose down -v
 ```
 Это удалит данные Postgres volume.
+
+### 10.4 Нужно пересоздать контейнер
+```bash
+docker compose up -d --force-recreate --no-deps backend
+```
+
+### 10.5 Нужно проверить метод генерации отчетов
+```bash
+curl -s -X POST "http://localhost:8000/api/v1/reports/analytics" \
+  -H "Content-Type: application/json" \
+  -d '{"year_from":2019,"year_to":2023}' | jq '.provider,.model_name'
+```
+
