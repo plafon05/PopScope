@@ -1,6 +1,6 @@
 # PopScope: Полное техническое описание
 
-## 1. Назначение проекта
+## 1. Общее о этом проекта
 
 PopScope — веб-приложение для демографической аналитики по муниципальным образованиям РФ с тремя основными режимами:
 
@@ -510,34 +510,245 @@ Backend тесты разделены на:
   - fallback-цепочки.
 - Гибкая деградация отчётов: приложение работает и при недоступности LLM.
 
-## 10. Ограничения и практические нюансы
 
-- В `frontend/package.json` есть много UI-библиотек, но реально активно используется только часть.
-- Визуальная метрика и статистическая метрика могут отличаться по единицам измерения (доли/‰/%), поэтому важно явно фиксировать единицы на каждом графике.
-- Доверительный интервал строится на RMSE-бэкстесте и отражает модельную неопределённость, а не «истинный» вероятностный интервал из байесовской модели.
-- При массовой выгрузке фронт тянет всю историю и прогнозы пагинацией, поэтому на больших объёмах важны оптимизация и кеширование.
+## 10. API-контракты (примеры)
 
-## 11. Ключевые файлы для быстрого входа
+## 10.1 `GET /api/v1/predictions`
 
-Backend:
+Пример запроса:
 
-- `backend/app/main.py`
-- `backend/app/core/config.py`
-- `backend/app/db/models.py`
-- `backend/app/api/router.py`
-- `backend/app/api/v1/endpoints/predictions.py`
-- `backend/app/services/reports.py`
-- `backend/app/services/llm.py`
-- `backend/ml/forecasting.py`
-- `backend/seed/seed.py`
+```http
+GET /api/v1/predictions?model_run_id=20260426170457-e51f48ba&year_from=2024&year_to=2038&limit=3&offset=0
+```
 
-Frontend:
+Пример ответа (фрагмент):
 
-- `frontend/src/app/data/DemographyProvider.tsx`
-- `frontend/src/app/api/demography.ts`
-- `frontend/src/app/api/predictions.ts`
-- `frontend/src/app/pages/Dashboard.tsx`
-- `frontend/src/app/pages/Forecasts.tsx`
-- `frontend/src/app/pages/Analytics.tsx`
-- `frontend/src/app/components/HeatMap.tsx`
-- `frontend/src/app/lib/heatmapRegions.ts`
+```json
+{
+  "items": [
+    {
+      "municipality_id": 85654000,
+      "target_year": 2038,
+      "model_name": "damped_panel_trend",
+      "model_version": "1.1.0",
+      "model_run_id": "20260426170457-e51f48ba",
+      "predicted_population": 14960,
+      "predicted_birth_rate": 0.0038,
+      "predicted_death_rate": 0.0085,
+      "predicted_natural_increase_rate": -0.0047,
+      "confidence": {
+        "natural_increase_rate": {
+          "lower": -0.007061,
+          "upper": -0.002264,
+          "level": 0.68,
+          "method": "municipality-backtest-rmse-by-horizon"
+        }
+      },
+      "metadata": {
+        "forecast_horizon": 15,
+        "quality_metrics": { "...": "..." },
+        "overall_quality_metrics": { "...": "..." }
+      }
+    }
+  ],
+  "total": 34290,
+  "limit": 3,
+  "offset": 0
+}
+```
+
+## 10.2 `POST /api/v1/reports/analytics`
+
+Пример запроса:
+
+```json
+{
+  "year_from": 2019,
+  "year_to": 2023,
+  "region": null,
+  "type": null
+}
+```
+
+Пример ответа:
+
+```json
+{
+  "provider": "gigachat",
+  "model_name": "GigaChat-2:2.0.28.2",
+  "region": null,
+  "municipality_type": null,
+  "year_from": 2019,
+  "year_to": 2023,
+  "report_text": "..."
+}
+```
+
+В fallback-режиме:
+
+```json
+{
+  "provider": "stub",
+  "model_name": "stub-v1",
+  "report_text": "Аналитическая справка (fallback)..."
+}
+```
+
+## 12.3 Ошибки и коды
+
+Для `POST /predictions`:
+
+- `409` — дублирование по `(model_run_id, municipality_id, target_year)`.
+- `404` — не найден `municipality_id` (ошибка FK).
+- `400` — прочие нарушения валидности/целостности.
+
+Для `POST /reports/analytics`:
+
+- при падении внешнего LLM endpoint остаётся `200`, но контент будет fallback (деградация без отказа API).
+
+## 11. Единицы измерения: БД → API → UI
+
+Это критичный раздел, чтобы исключить расхождения в интерпретации чисел.
+
+| Метрика | В БД/модели | В API | Во frontend UI |
+|---|---|---|---|
+| `population` | абсолютное число | абсолютное число | абсолютное число (формат `тыс/млн`) |
+| `birth_rate` | доля (например `0.0109`) | доля | обычно `‰` (`*1000`) |
+| `death_rate` | доля | доля | обычно `‰` (`*1000`) |
+| `migration` | доля на 1 жителя | доля | `на 1000` (`*1000`) или абсолют в зависимости от режима |
+| `natural_increase_rate` | доля (`birth_rate - death_rate`) | доля | в Forecasts обычно `%` (`*100`), в других графиках может быть `‰` |
+
+Практическое правило:
+
+- Backend/ML хранят и считают ставки в долях.
+- UI отвечает за перевод в человекочитаемые единицы (`‰`, `%`), и подпись осей/легенд должна совпадать с преобразованием.
+
+## 12. Математика ML (коротко в формулах)
+
+## 12.1 Damped trend
+
+Для ряда с последним трансформированным уровнем `L_t` и slope `b`:
+
+`L_(t+h) = L_t + Σ_{k=0..h-1} b * damping^k`
+
+Далее:
+
+`y_(t+h) = inverse_transform(L_(t+h))`
+
+где для `population` используется `log/exp`, для rate-метрик — identity.
+
+## 12.2 Blend для death_rate
+
+`death_pred = (1 - w) * trend_pred + w * autoreg_pred`
+
+где `w` выбирается перебором кандидатов по минимуму backtest RMSE.
+
+## 12.3 Natural increase и interval
+
+`natural_pred = birth_pred - death_pred`
+
+`width_h = z_score * rmse_h * width_multiplier`
+
+`lower_h = natural_pred - width_h`
+
+`upper_h = natural_pred + width_h`
+
+С последующим клиппингом в допустимые пределы метрики.
+
+## 13. Runbook переобучения и пересидирования
+
+Когда нужно:
+
+- изменена логика `backend/ml/forecasting.py`,
+- обновлены CSV и нужно пересчитать прогнозы,
+- нужен новый `model_run_id`.
+
+Рекомендуемый порядок:
+
+1. Поднять сервисы:
+   - `docker compose up -d`
+2. Очистить прогнозную таблицу:
+   - `TRUNCATE municipality_predictions RESTART IDENTITY`
+3. Удалить артефакты модели в `backend/ml/`:
+   - `model.json`, `predictions_2024_2038.json`
+4. Запустить `data-import` профиль.
+5. Проверить `GET /predictions?limit=1`.
+6. Проверить, что `model_run_id` новый.
+
+Важно:
+
+- без `TRUNCATE municipality_predictions` импорт может пропустить загрузку прогнозов как уже существующих;
+- без удаления артефактов модель может не переобучаться и использовать старые файлы.
+
+## 14. Data quality правила
+
+## 14.1 На этапе сидирования
+
+- подхват кодировок (`utf-8-sig`/`utf-8`/`cp1251`);
+- подхват разделителя `,`/`;`;
+- нормализация пустых значений (`null/none/nan`);
+- приведение запятой в десятичной записи к точке.
+
+## 14.2 На уровне схемы БД
+
+- уникальность `(municipality_id, year)` в `municipality_data`;
+- уникальность `(model_run_id, municipality_id, target_year)` в `municipality_predictions`;
+- ограничение годов `>= 1900`;
+- FK на `municipalities`.
+
+## 14.3 На уровне карты плотности
+
+- `area <= 0` или отсутствует — регион/МО не участвуют в расчёте плотности;
+- при неоднозначном маппинге регион помечается как `нет данных`.
+
+## 15. Производительность и масштабируемость
+
+- В API используется paginated pull для крупных выборок (`500/2000/5000` в зависимости от endpoint).
+- Критичные индексы:
+  - `municipality_data(year, municipality_id)` (через комбинацию существующих индексов),
+  - `municipality_predictions(municipality_id, target_year)`,
+  - `municipality_predictions(model_name, model_version)`,
+  - `municipalities(region/type)`.
+- Frontend грузит крупные объёмы в память, поэтому bottleneck обычно на:
+  - сеть/время ответа API,
+  - клиентские `useMemo`-агрегации,
+  - количество одновременно отображаемых серий на графиках.
+
+Рекомендации для роста объёма:
+
+- добавить агрегирующие backend endpoint под дашборд;
+- ввести серверный кэш для часто запрашиваемых срезов;
+- ограничить количество серий в тяжёлых графиках (top-N + explicit selection).
+
+## 16. Наблюдаемость и диагностика
+
+Минимальный operational набор:
+
+- backend logs (`docker compose logs backend`),
+- контроль ошибок LLM (`LLM report generation failed...`),
+- проверка `model_run_id` и `generated_at`,
+- health endpoints (`/health/live`, `/health/ready`).
+
+Что полезно добавить в будущем:
+
+- метрики latency по endpoint;
+- счётчик fallback-срабатываний LLM;
+- доля регионов с `нет данных` на карте;
+- время сидирования и время ML-тренировки.
+
+## 17. Безопасность и секреты
+
+- Секреты LLM (`GIGACHAT_AUTH_KEY`) хранятся только в `.env`, не в репозитории.
+- Для GigaChat нужно корректно настроить SSL:
+  - `GIGACHAT_SSL_VERIFY=true` по умолчанию,
+  - при необходимости указать `GIGACHAT_CA_BUNDLE_PATH`.
+- Никогда не логировать auth key/token.
+- Публичные артефакты (`model.json`, `predictions_*.json`) могут быть очень большими и обычно не должны попадать в git.
+
+## 18. Ограничения модели и интерпретация прогноза
+
+- Это аналитический прогноз, не управленческое решение.
+- Интервал — эмпирический (на основе historical RMSE), а не строгая вероятностная гарантия.
+- Модель не учитывает экзогенные шоки (политика, кризисы, эпидемии, крупные миграционные события) как отдельные факторы.
+- На дальних горизонтах неопределённость должна интерпретироваться осторожно даже при визуально узком коридоре.
+
