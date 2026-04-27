@@ -991,7 +991,7 @@ export function Analytics() {
         <div className="bg-white border border-gray-200 rounded-xl shadow-sm overflow-hidden">
           <div className="px-5 py-4 border-b border-gray-100">
             <h3 className="text-gray-800">Динамика по годам</h3>
-            <p className="text-xs text-gray-400 mt-0.5">Средние значения по выборке · включая COVID-период</p>
+            <p className="text-xs text-gray-400 mt-0.5">Средние значения по выборке</p>
           </div>
           <div className="px-4 py-4" style={{ height: 280 }}>
             <ResponsiveContainer width="100%" height="100%">
