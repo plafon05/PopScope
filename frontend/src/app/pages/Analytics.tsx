@@ -1,4 +1,4 @@
-import { useState, useMemo, useRef } from 'react';
+import { useState, useMemo, useRef, useEffect } from 'react';
 import {
   BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer,
   Legend, LabelList, LineChart, Line, Cell, RadarChart, Radar, PolarGrid,
@@ -12,6 +12,7 @@ import {
 } from 'lucide-react';
 import { useDemographyData } from '../data/DemographyProvider';
 import { linearRegression } from '../lib/regression';
+import { fetchAnalyticsReport } from '../api/reports';
 
 // ── Aggregate helpers ─────────────────────────────────────────────────────────
 function avgArr(arr: number[]) { return arr.length ? arr.reduce((a, b) => a + b, 0) / arr.length : 0; }
@@ -81,6 +82,21 @@ const YEARS_HIST = [2019, 2020, 2021, 2022, 2023];
 const YEARS_FC   = [2024, 2025, 2026];
 const ALL_YEARS_CHART = [...YEARS_HIST, ...YEARS_FC];
 
+function isUrbanType(type: string): boolean {
+  return type.trim().toLowerCase().includes('город');
+}
+
+function shortTypeLabel(type: string): string {
+  const normalized = type.trim().toLowerCase();
+  if (normalized === 'городской округ') return 'ГО';
+  if (normalized === 'муниципальный район') return 'МР';
+  if (normalized === 'муниципальный округ') return 'МО';
+  if (normalized === 'город федерального значения') return 'ГФЗ';
+  if (normalized === 'административный район') return 'АР';
+  if (normalized === 'городской округ с внутригородским делением') return 'ГО-вгд';
+  return type;
+}
+
 type RegionDataItem = {
   region: string;
   fullRegion: string;
@@ -98,28 +114,200 @@ type YearDynamicsItem = {
   naturalGrowthRate: number;
 };
 
+function renderReportMarkdown(text: string): JSX.Element[] {
+  const lines = text.replace(/\r/g, '').split('\n');
+  const blocks: JSX.Element[] = [];
+  let i = 0;
+  let key = 0;
+  let firstContentRendered = false;
+
+  const SECTION_TITLES = new Set([
+    'краткое резюме',
+    'ключевые тенденции',
+    'риски',
+    'рекомендации',
+    'заключение',
+  ]);
+
+  const renderInline = (value: string): (string | JSX.Element)[] => {
+    const chunks = value.split(/(\*\*[^*]+\*\*)/g).filter(Boolean);
+    return chunks.map((chunk, idx) => {
+      if (chunk.startsWith('**') && chunk.endsWith('**') && chunk.length > 4) {
+        return <strong key={idx}>{chunk.slice(2, -2)}</strong>;
+      }
+      return chunk;
+    });
+  };
+
+  const isSpecialLine = (line: string): boolean => (
+    /^#{1,3}\s+/.test(line) ||
+    /^[-*]\s+/.test(line) ||
+    /^\d+\.\s+/.test(line) ||
+    /^-{3,}$/.test(line)
+  );
+
+  while (i < lines.length) {
+    const raw = lines[i];
+    const line = raw.trim();
+
+    if (!line) {
+      i += 1;
+      continue;
+    }
+
+    if (!firstContentRendered && !/^#{1,3}\s+/.test(line)) {
+      blocks.push(
+        <h1 key={`h0-${key++}`} className="text-lg font-semibold text-gray-900">
+          {renderInline(line)}
+        </h1>,
+      );
+      firstContentRendered = true;
+      i += 1;
+      continue;
+    }
+
+    if (SECTION_TITLES.has(line.toLowerCase())) {
+      blocks.push(
+        <h2 key={`hs-${key++}`} className="text-base font-semibold text-gray-800 mt-3">
+          {renderInline(line)}
+        </h2>,
+      );
+      i += 1;
+      continue;
+    }
+
+    if (/^---+$/.test(line)) {
+      blocks.push(<hr key={`hr-${key++}`} className="my-3 border-gray-200" />);
+      i += 1;
+      continue;
+    }
+
+    if (/^###\s+/.test(line)) {
+      blocks.push(
+        <h3 key={`h3-${key++}`} className="text-sm font-semibold text-gray-800 mt-3">
+          {renderInline(line.replace(/^###\s+/, ''))}
+        </h3>,
+      );
+      i += 1;
+      continue;
+    }
+
+    if (/^##\s+/.test(line)) {
+      blocks.push(
+        <h2 key={`h2-${key++}`} className="text-base font-semibold text-gray-800 mt-3">
+          {renderInline(line.replace(/^##\s+/, ''))}
+        </h2>,
+      );
+      i += 1;
+      continue;
+    }
+
+    if (/^#\s+/.test(line)) {
+      blocks.push(
+        <h1 key={`h1-${key++}`} className="text-lg font-semibold text-gray-900 mt-3">
+          {renderInline(line.replace(/^#\s+/, ''))}
+        </h1>,
+      );
+      i += 1;
+      continue;
+    }
+
+    if (/^[-*]\s+/.test(line)) {
+      const items: string[] = [];
+      while (i < lines.length) {
+        const current = lines[i].trim();
+        if (!/^[-*]\s+/.test(current)) break;
+        items.push(current.replace(/^[-*]\s+/, ''));
+        i += 1;
+      }
+      blocks.push(
+        <ul key={`ul-${key++}`} className="list-disc pl-5 space-y-1 text-sm text-gray-700">
+          {items.map((item, idx) => <li key={idx}>{renderInline(item)}</li>)}
+        </ul>,
+      );
+      continue;
+    }
+
+    if (/^\d+\.\s+/.test(line)) {
+      const items: string[] = [];
+      while (i < lines.length) {
+        const current = lines[i].trim();
+        if (!/^\d+\.\s+/.test(current)) break;
+        items.push(current.replace(/^\d+\.\s+/, ''));
+        i += 1;
+      }
+      blocks.push(
+        <ol key={`ol-${key++}`} className="list-decimal pl-5 space-y-1 text-sm text-gray-700">
+          {items.map((item, idx) => <li key={idx}>{renderInline(item)}</li>)}
+        </ol>,
+      );
+      continue;
+    }
+
+    const paragraphLines: string[] = [line];
+    i += 1;
+    while (i < lines.length) {
+      const current = lines[i].trim();
+      if (!current || isSpecialLine(current)) break;
+      paragraphLines.push(current);
+      i += 1;
+    }
+    blocks.push(
+      <p key={`p-${key++}`} className="text-sm leading-relaxed text-gray-700">
+        {renderInline(paragraphLines.join(' '))}
+      </p>,
+    );
+  }
+
+  return blocks;
+}
+
 // ── Analytical Report Component ───────────────────────────────────────────────
 function AnalyticalReport({
   filteredData,
   municipalities,
+  regions,
+  typeOptions,
   selectedRegion,
+  selectedType,
+  onRegionChange,
+  onTypeChange,
   totalPop,
   avgBirth,
   avgDeath,
   avgGrowth,
   avgMigration,
+  positiveCount,
+  negativeCount,
 }: {
   filteredData: MunicipalityRecord[];
   municipalities: ReturnType<typeof aggregateMunicipalities>;
+  regions: string[];
+  typeOptions: string[];
   selectedRegion: string;
+  selectedType: string;
+  onRegionChange: (value: string) => void;
+  onTypeChange: (value: string) => void;
   totalPop: number;
   avgBirth: number;
   avgDeath: number;
   avgGrowth: number;
   avgMigration: number;
+  positiveCount: number;
+  negativeCount: number;
 }) {
   const reportRef = useRef<HTMLDivElement>(null);
-  const today = new Date().toLocaleDateString('ru-RU', { day: '2-digit', month: 'long', year: 'numeric' });
+  const [reportText, setReportText] = useState<string | null>(null);
+  const [reportProvider, setReportProvider] = useState<string>('stub');
+  const [reportModelName, setReportModelName] = useState<string | null>(null);
+  const [reportLoading, setReportLoading] = useState(false);
+  const [reportError, setReportError] = useState<string | null>(null);
+  const useLlmNarrative = Boolean(reportText) && reportProvider !== 'stub';
+  const trendsForecastLayoutClass = useLlmNarrative
+    ? 'flex justify-center'
+    : reportProvider === 'stub'
+      ? 'grid grid-cols-1 xl:grid-cols-[1fr_560px] gap-5'
+      : 'grid grid-cols-1 xl:grid-cols-[1fr_380px] gap-5';
 
   // Population dynamics 2019→2023
   const pop2019 = useMemo(() => filteredData.filter((d) => d.year === 2019).reduce((s, d) => s + d.population, 0), [filteredData]);
@@ -138,20 +326,53 @@ function AnalyticalReport({
   const ngForecast2026 = Math.round(predict(2026) * 100) / 100;
 
   // Mini chart data
-  const miniChartData = ALL_YEARS_CHART.map((year) => {
-    const isFc = year > 2023;
-    const hist = avgArr(filteredData.filter((d) => d.year === year).map((d) => d.naturalGrowthPercent));
-    const fc   = Math.round(predict(year) * 100) / 100;
-    const sigma = 0.08;
-    const grow  = 1 + 0.5 * (year - 2023);
-    return {
-      year: String(year),
-      actual:   isFc ? undefined : Math.round(hist * 100) / 100,
-      forecast: isFc ? fc : undefined,
-      upper:    isFc ? fc + sigma * grow : undefined,
-      lower:    isFc ? fc - sigma * grow : undefined,
-    };
-  });
+  const miniChartData = useMemo(() => {
+    const residuals = YEARS_HIST.map((year, idx) => ngYs[idx] - predict(year));
+    const rmse = Math.sqrt(avgArr(residuals.map((v) => v * v)));
+    const baseSigma = Number.isFinite(rmse) && rmse > 0 ? rmse : 0.08;
+
+    return ALL_YEARS_CHART.map((year) => {
+      const isFc = year > 2023;
+      const hist = avgArr(filteredData.filter((d) => d.year === year).map((d) => d.naturalGrowthPercent));
+      const fc = Math.round(predict(year) * 100) / 100;
+      if (!isFc) {
+        return {
+          year: String(year),
+          actual: Math.round(hist * 100) / 100,
+          forecast: undefined,
+          lower: undefined,
+          upper: undefined,
+          band: undefined,
+        };
+      }
+
+      // Keep interval growth smooth by horizon (without abrupt jumps).
+      const horizon = Math.max(1, year - 2023);
+      const width = baseSigma * Math.sqrt(horizon);
+      const lower = fc - width;
+      const upper = fc + width;
+
+      return {
+        year: String(year),
+        actual: undefined,
+        forecast: fc,
+        lower,
+        upper,
+        band: upper - lower,
+      };
+    });
+  }, [filteredData, ngYs, predict]);
+
+  const miniYAxisDomain = useMemo<[number, number]>(() => {
+    const values = miniChartData.flatMap((row) =>
+      [row.actual, row.forecast, row.lower, row.upper].filter((v): v is number => typeof v === 'number' && Number.isFinite(v)),
+    );
+    if (values.length === 0) return [-1.2, -0.4];
+    const min = Math.min(...values);
+    const max = Math.max(...values);
+    const pad = Math.max(0.04, (max - min) * 0.12);
+    return [Math.round((min - pad) * 100) / 100, Math.round((max + pad) * 100) / 100];
+  }, [miniChartData]);
 
   // Trend text helpers
   const trendText = (v2019: number, v2023: number, label: string, unit: string, inverse = false) => {
@@ -184,6 +405,39 @@ function AnalyticalReport({
         'Организовать дополнительное финансирование системы здравоохранения для снижения смертности.',
         'Рассмотреть программы привлечения внутренней миграции из других регионов.',
       ];
+
+  useEffect(() => {
+    let cancelled = false;
+    async function loadReport() {
+      setReportLoading(true);
+      setReportError(null);
+      try {
+        const municipalityType = selectedType === 'all' ? null : selectedType;
+        const response = await fetchAnalyticsReport({
+          region: selectedRegion === 'all' ? null : selectedRegion,
+          type: municipalityType,
+          year_from: 2019,
+          year_to: 2023,
+        });
+        if (cancelled) return;
+        setReportText(response.report_text);
+        setReportProvider(response.provider);
+        setReportModelName(response.model_name);
+      } catch (error) {
+        if (cancelled) return;
+        setReportError(error instanceof Error ? error.message : 'Не удалось загрузить отчёт');
+        setReportText(null);
+        setReportProvider('stub');
+        setReportModelName(null);
+      } finally {
+        if (!cancelled) setReportLoading(false);
+      }
+    }
+    void loadReport();
+    return () => {
+      cancelled = true;
+    };
+  }, [selectedRegion, selectedType]);
 
   const handlePrint = () => {
     const printContent = reportRef.current?.innerHTML ?? '';
@@ -231,58 +485,102 @@ function AnalyticalReport({
           </div>
           <div>
             <h3 className="text-gray-800">Аналитическая справка по демографической ситуации</h3>
-            <p className="text-xs text-gray-400 mt-0.5">Автоматически сформированный отчёт на основе текущих данных</p>
+            <div className="flex flex-wrap gap-4 mt-2 text-xs text-gray-400">
+              <span><strong className="text-gray-600">Период анализа:</strong> 2019–2023</span>
+              <span><strong className="text-gray-600">МО в выборке:</strong> {municipalities.length}</span>
+            </div>
           </div>
         </div>
-        <button
-          onClick={handlePrint}
-          className="flex items-center gap-2 px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white text-sm rounded-lg transition-colors shadow-sm"
-        >
-          <Printer size={15} />
-          Экспорт PDF
-        </button>
+        <div className="flex flex-wrap items-end gap-3">
+          <div className="flex flex-col gap-1 min-w-[220px]">
+            <label className="text-xs text-gray-500">Регион</label>
+            <div className="relative">
+              <select
+                value={selectedRegion}
+                onChange={(e) => onRegionChange(e.target.value)}
+                className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm bg-white focus:outline-none focus:ring-2 focus:ring-blue-500 appearance-none pr-8 text-gray-700"
+              >
+                <option value="all">Все регионы</option>
+                {regions.map((r) => <option key={r} value={r}>{r}</option>)}
+              </select>
+              <ChevronDown size={14} className="absolute right-2.5 top-1/2 -translate-y-1/2 text-gray-400 pointer-events-none" />
+            </div>
+          </div>
+          <div className="flex flex-col gap-1 min-w-[220px]">
+            <label className="text-xs text-gray-500">Тип МО</label>
+            <div className="relative">
+              <select
+                value={selectedType}
+                onChange={(e) => onTypeChange(e.target.value)}
+                className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm bg-white focus:outline-none focus:ring-2 focus:ring-blue-500 appearance-none pr-8 text-gray-700"
+              >
+                <option value="all">Все типы</option>
+                {typeOptions.map((t) => <option key={t} value={t}>{t}</option>)}
+              </select>
+              <ChevronDown size={14} className="absolute right-2.5 top-1/2 -translate-y-1/2 text-gray-400 pointer-events-none" />
+            </div>
+          </div>
+          <button
+            onClick={handlePrint}
+            className="flex items-center gap-2 px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white text-sm rounded-lg transition-colors shadow-sm"
+          >
+            <Printer size={15} />
+            Экспорт PDF
+          </button>
+        </div>
+      </div>
+      <div className="px-6 py-4 border-b border-gray-100">
+        <div className="grid grid-cols-2 lg:grid-cols-4 xl:grid-cols-5 gap-4">
+          <KpiCard label="Суммарное население" value={fmtPop(totalPop)} sub={`${municipalities.length} МО`} icon={Users} colorClass="text-blue-600" bgClass="bg-blue-50" />
+          <KpiCard label="Ср. рождаемость"     value={`${avgBirth} ‰`}  sub="на 1000 жителей"               icon={Heart} colorClass="text-emerald-600" bgClass="bg-emerald-50" />
+          <KpiCard label="Ср. смертность"      value={`${avgDeath} ‰`}  sub="на 1000 жителей"               icon={Skull} colorClass="text-red-500" bgClass="bg-red-50" />
+          <KpiCard label="Ср. ест. прирост"    value={`${avgGrowth > 0 ? '+' : ''}${avgGrowth}%`} sub={`${positiveCount} с приростом`}
+            icon={avgGrowth >= 0 ? TrendingUp : TrendingDown}
+            colorClass={avgGrowth >= 0 ? 'text-emerald-600' : 'text-red-500'}
+            bgClass={avgGrowth >= 0 ? 'bg-emerald-50' : 'bg-red-50'} />
+          <div className="bg-white border border-gray-200 rounded-xl px-5 py-4 shadow-sm col-span-2 lg:col-span-1">
+            <p className="text-xs text-gray-400 mb-2">Прирост / Убыль</p>
+            <div className="flex gap-2 items-center mb-1.5">
+              <div className="h-2 rounded-full bg-emerald-400" style={{ flex: positiveCount }} />
+              <div className="h-2 rounded-full bg-red-400"     style={{ flex: negativeCount }} />
+            </div>
+            <div className="flex justify-between text-xs">
+              <span className="text-emerald-600">{positiveCount} прирост ({municipalities.length ? Math.round(positiveCount / municipalities.length * 100) : 0}%)</span>
+              <span className="text-red-500">{negativeCount} убыль</span>
+            </div>
+          </div>
+        </div>
       </div>
 
       {/* Report body */}
       <div ref={reportRef} className="px-6 py-5 space-y-5 text-sm text-gray-700">
-        {/* Header */}
-        <div className="border-b border-gray-100 pb-4">
-          <h1 className="text-gray-900" style={{ fontSize: 18 }}>
-            Аналитическая справка по демографической ситуации
-          </h1>
-          <div className="flex flex-wrap gap-6 mt-2 text-xs text-gray-400">
-            <span><strong className="text-gray-600">Регион:</strong> {selectedRegion === 'all' ? 'Все регионы' : selectedRegion}</span>
-            <span><strong className="text-gray-600">Период анализа:</strong> 2019–2023</span>
-            <span><strong className="text-gray-600">Дата оформления:</strong> {today}</span>
-            <span><strong className="text-gray-600">МО в выборке:</strong> {municipalities.length}</span>
-          </div>
-        </div>
-
         {/* Summary */}
         <div>
-          <h2 className="text-blue-700 mb-2" style={{ fontSize: 13, fontWeight: 600 }}>Краткое резюме</h2>
+          <h2 className="text-blue-700 mb-2" style={{ fontSize: 13, fontWeight: 600 }}>
+            {useLlmNarrative ? 'Текст аналитической справки' : 'Краткое резюме'}
+          </h2>
           <div className="bg-blue-50 border border-blue-100 rounded-xl px-4 py-3 text-gray-700 leading-relaxed">
-            {summary}
-          </div>
-          <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 mt-3">
-            {[
-              { label: 'Динамика населения',  value: `${popDynPct > 0 ? '+' : ''}${popDynPct}%`, pos: popDynPct >= 0 },
-              { label: 'Ест. прирост (ср.)',   value: `${avgGrowth > 0 ? '+' : ''}${avgGrowth}%`, pos: avgGrowth >= 0 },
-              { label: 'Рождаемость (ср.)',    value: `${avgBirth} ‰`, pos: true },
-              { label: 'Миграция (ср./год)',   value: fmtMig(avgMigration),                        pos: avgMigration >= 0 },
-            ].map((s) => (
-              <div key={s.label} className="border border-gray-200 rounded-xl px-4 py-3 text-center">
-                <p className="text-xs text-gray-400">{s.label}</p>
-                <p className={`mt-1 font-semibold ${s.pos ? 'text-emerald-600' : 'text-red-500'}`} style={{ fontSize: 15 }}>{s.value}</p>
-              </div>
-            ))}
+            {reportLoading && (
+              <p className="text-sm text-gray-500">Генерируем текст отчёта...</p>
+            )}
+            {!reportLoading && useLlmNarrative && reportText && (
+              <div className="space-y-2">{renderReportMarkdown(reportText)}</div>
+            )}
+            {!reportLoading && !useLlmNarrative && (
+              <p className="text-sm leading-relaxed">{summary}</p>
+            )}
+            {reportError && (
+              <p className="text-xs text-amber-600 mt-2">
+                LLM недоступен, показан локальный текст. Детали: {reportError}
+              </p>
+            )}
           </div>
         </div>
 
         {/* Trends + Forecast */}
-        <div className="grid grid-cols-1 xl:grid-cols-[1fr_380px] gap-5">
+        <div className={trendsForecastLayoutClass}>
           {/* Trends */}
-          <div>
+          {!useLlmNarrative && <div>
             <h2 className="text-blue-700 mb-3" style={{ fontSize: 13, fontWeight: 600 }}>Основные тенденции</h2>
             <div className="space-y-2">
               {[
@@ -300,10 +598,10 @@ function AnalyticalReport({
                 </div>
               ))}
             </div>
-          </div>
+          </div>}
 
           {/* Forecast block */}
-          <div>
+          <div className={useLlmNarrative ? 'w-full max-w-[880px]' : ''}>
             <h2 className="text-blue-700 mb-3" style={{ fontSize: 13, fontWeight: 600 }}>Прогнозная оценка</h2>
             <div className="border border-gray-200 rounded-xl overflow-hidden">
               <div className="px-4 py-3 bg-gray-50 border-b border-gray-100">
@@ -322,16 +620,65 @@ function AnalyticalReport({
                   <ComposedChart data={miniChartData} margin={{ top: 10, right: 16, left: 0, bottom: 4 }}>
                     <CartesianGrid strokeDasharray="3 3" stroke="#f0f0f0" />
                     <XAxis dataKey="year" tick={{ fontSize: 10, fill: '#9ca3af' }} axisLine={false} tickLine={false} />
-                    <YAxis tick={{ fontSize: 10, fill: '#9ca3af' }} axisLine={false} tickLine={false} tickFormatter={(v) => `${v.toFixed(1)}%`} />
+                    <YAxis
+                      tick={{ fontSize: 10, fill: '#9ca3af' }}
+                      axisLine={false}
+                      tickLine={false}
+                      tickFormatter={(v) => `${v.toFixed(1)}%`}
+                      domain={miniYAxisDomain}
+                    />
                     <ReferenceLine x="2023" stroke="#9ca3af" strokeDasharray="3 3" />
                     <Tooltip
                       formatter={(v: number) => [`${v > 0 ? '+' : ''}${v.toFixed(2)}%`]}
                       contentStyle={{ borderRadius: 10, fontSize: 11, border: '1px solid #e5e7eb' }}
                     />
-                    <Area type="monotone" dataKey="upper" stroke="none" fill="#8b5cf6" fillOpacity={0.12} dot={false} isAnimationActive={false} legendType="none" />
-                    <Line type="monotone" dataKey="lower" stroke="#8b5cf6" strokeOpacity={0.3} strokeWidth={1} strokeDasharray="3 3" dot={false} isAnimationActive={false} legendType="none" />
-                    <Line type="monotone" dataKey="actual"   stroke="#8b5cf6" strokeWidth={2} dot={{ r: 3, fill: '#8b5cf6' }} legendType="none" connectNulls={false} />
-                    <Line type="monotone" dataKey="forecast" stroke="#8b5cf6" strokeWidth={2} strokeDasharray="6 4" dot={false} legendType="none" connectNulls={false} />
+                    <Area
+                      type="linear"
+                      dataKey="lower"
+                      stackId="mini_ci"
+                      stroke="none"
+                      fill="transparent"
+                      isAnimationActive={false}
+                      legendType="none"
+                      connectNulls={false}
+                    />
+                    <Area
+                      type="linear"
+                      dataKey="band"
+                      stackId="mini_ci"
+                      stroke="none"
+                      fill="#8b5cf6"
+                      fillOpacity={0.14}
+                      isAnimationActive={false}
+                      legendType="none"
+                      connectNulls={false}
+                    />
+                    <Line
+                      type="linear"
+                      dataKey="lower"
+                      stroke="#8b5cf6"
+                      strokeOpacity={0.32}
+                      strokeWidth={1}
+                      strokeDasharray="3 3"
+                      dot={false}
+                      isAnimationActive={false}
+                      legendType="none"
+                      connectNulls={false}
+                    />
+                    <Line
+                      type="linear"
+                      dataKey="upper"
+                      stroke="#8b5cf6"
+                      strokeOpacity={0.32}
+                      strokeWidth={1}
+                      strokeDasharray="3 3"
+                      dot={false}
+                      isAnimationActive={false}
+                      legendType="none"
+                      connectNulls={false}
+                    />
+                    <Line type="linear" dataKey="actual"   stroke="#8b5cf6" strokeWidth={2} dot={{ r: 3, fill: '#8b5cf6' }} legendType="none" connectNulls={false} />
+                    <Line type="linear" dataKey="forecast" stroke="#8b5cf6" strokeWidth={2} strokeDasharray="6 4" dot={false} legendType="none" connectNulls={false} />
                   </ComposedChart>
                 </ResponsiveContainer>
               </div>
@@ -340,22 +687,29 @@ function AnalyticalReport({
         </div>
 
         {/* Recommendations */}
-        <div>
-          <h2 className="text-blue-700 mb-2" style={{ fontSize: 13, fontWeight: 600 }}>Рекомендации</h2>
-          <ul className="space-y-1.5">
-            {recommendations.map((r, i) => (
-              <li key={i} className="flex gap-2 text-xs text-gray-600 leading-relaxed">
-                <span className="mt-0.5 w-5 h-5 bg-blue-100 text-blue-600 rounded-full flex items-center justify-center shrink-0 text-[10px] font-semibold">{i + 1}</span>
-                {r}
-              </li>
-            ))}
-          </ul>
-        </div>
+        {!useLlmNarrative && <div>
+          <h2 className="text-blue-700 mb-3" style={{ fontSize: 13, fontWeight: 600 }}>Рекомендации</h2>
+          <div className="border border-blue-100 bg-blue-50/40 rounded-xl p-3">
+            <ul className="grid grid-cols-1 gap-2">
+              {recommendations.map((r, i) => (
+                <li key={i} className="flex gap-2.5 text-sm text-gray-700 leading-relaxed px-2 py-2">
+                  <span className="mt-0.5 w-6 h-6 bg-blue-100 text-blue-600 rounded-full flex items-center justify-center shrink-0 text-xs font-semibold">{i + 1}</span>
+                  {r}
+                </li>
+              ))}
+            </ul>
+          </div>
+        </div>}
 
         {/* Footer */}
         <div className="border-t border-gray-100 pt-4 text-xs text-gray-400">
           Отчёт сформирован автоматически на основе статистических данных и прогнозной модели линейной регрессии.
-          Все прогнозные значения носят иллюстративный характер и не являются официальной статистикой.
+          {reportProvider !== 'stub' && (
+            <div className="mt-1">
+              Автоматически сформированный отчёт на основе текущих данных · источник: {reportProvider}
+              {reportModelName ? ` (${reportModelName})` : ''}
+            </div>
+          )}
         </div>
       </div>
     </div>
@@ -373,12 +727,17 @@ export function Analytics() {
   const [naturalGrowthTopBy, setNaturalGrowthTopBy] = useState<'population' | 'birthRate' | 'deathRate' | 'naturalGrowthPercent'>('naturalGrowthPercent');
   const [topMetric, setTopMetric] = useState<'naturalGrowthPercent' | 'population' | 'birthRate' | 'deathRate'>('naturalGrowthPercent');
   const [topDir,    setTopDir]    = useState<'top' | 'bottom'>('top');
+  const typeOptions = useMemo(
+    () => [...new Set(allData.map((d) => d.type))].sort((a, b) => a.localeCompare(b, 'ru')),
+    [allData],
+  );
 
   const filteredData = useMemo(() => allData.filter((d) => {
     if (selectedRegion !== 'all' && d.region !== selectedRegion) return false;
     if (selectedType   !== 'all' && d.type   !== selectedType)   return false;
+    if (d.year < YEARS_HIST[0] || d.year > YEARS_HIST[YEARS_HIST.length - 1]) return false;
     return true;
-  }), [selectedRegion, selectedType]);
+  }), [allData, selectedRegion, selectedType]);
 
   const municipalities = useMemo(() => aggregateMunicipalities(filteredData), [filteredData]);
 
@@ -453,8 +812,8 @@ export function Analytics() {
   })), [municipalities]);
 
   const radarData = useMemo(() => {
-    const cities = municipalities.filter((m) => m.type === 'city');
-    const munis  = municipalities.filter((m) => m.type === 'municipality');
+    const cities = municipalities.filter((m) => isUrbanType(m.type));
+    const munis  = municipalities.filter((m) => !isUrbanType(m.type));
     if (!cities.length || !munis.length) return [];
     const norm = (v: number, min: number, max: number) => max === min ? 50 : ((v - min) / (max - min)) * 100;
     return [
@@ -491,39 +850,6 @@ export function Analytics() {
 
   return (
     <div className="max-w-[1600px] mx-auto px-6 py-5 space-y-5">
-      {/* Header + filters */}
-      <div className="flex flex-wrap items-end justify-between gap-4">
-        <div>
-          <h2 className="text-gray-900">Аналитика демографических показателей</h2>
-          <p className="text-sm text-gray-400 mt-0.5">Сравнение регионов и типов МО · данные 2019–2023</p>
-        </div>
-        <div className="flex flex-wrap items-end gap-3">
-          <div className="flex flex-col gap-1">
-            <label className="text-xs text-gray-500">Регион</label>
-            <div className="relative">
-              <select value={selectedRegion} onChange={(e) => setSelectedRegion(e.target.value)}
-                className="border border-gray-200 rounded-lg px-3 py-2 text-sm bg-white focus:outline-none focus:ring-2 focus:ring-blue-500 appearance-none pr-8 text-gray-700">
-                <option value="all">Все регионы</option>
-                {regions.map((r) => <option key={r} value={r}>{r}</option>)}
-              </select>
-              <ChevronDown size={14} className="absolute right-2.5 top-1/2 -translate-y-1/2 text-gray-400 pointer-events-none" />
-            </div>
-          </div>
-          <div className="flex flex-col gap-1">
-            <label className="text-xs text-gray-500">Тип МО</label>
-            <div className="relative">
-              <select value={selectedType} onChange={(e) => setSelectedType(e.target.value)}
-                className="border border-gray-200 rounded-lg px-3 py-2 text-sm bg-white focus:outline-none focus:ring-2 focus:ring-blue-500 appearance-none pr-8 text-gray-700">
-                <option value="all">Все типы</option>
-                <option value="city">Городской округ</option>
-                <option value="municipality">Муниципальный район</option>
-              </select>
-              <ChevronDown size={14} className="absolute right-2.5 top-1/2 -translate-y-1/2 text-gray-400 pointer-events-none" />
-            </div>
-          </div>
-        </div>
-      </div>
-
       {isLoading && (
         <div className="bg-white border border-gray-200 rounded-xl px-4 py-3 text-sm text-gray-500">
           Загрузка данных...
@@ -535,38 +861,23 @@ export function Analytics() {
         </div>
       )}
 
-      {/* KPI cards */}
-      <div className="grid grid-cols-2 lg:grid-cols-4 xl:grid-cols-5 gap-4">
-        <KpiCard label="Суммарное население" value={fmtPop(totalPop)} sub={`${municipalities.length} МО`} icon={Users} colorClass="text-blue-600" bgClass="bg-blue-50" />
-        <KpiCard label="Ср. рождаемость"     value={`${avgBirth} ‰`}  sub="на 1000 жителей"               icon={Heart} colorClass="text-emerald-600" bgClass="bg-emerald-50" />
-        <KpiCard label="Ср. смертность"      value={`${avgDeath} ‰`}  sub="на 1000 жителей"               icon={Skull} colorClass="text-red-500" bgClass="bg-red-50" />
-        <KpiCard label="Ср. ест. прирост"    value={`${avgGrowth > 0 ? '+' : ''}${avgGrowth}%`} sub={`${positiveCount} с приростом`}
-          icon={avgGrowth >= 0 ? TrendingUp : TrendingDown}
-          colorClass={avgGrowth >= 0 ? 'text-emerald-600' : 'text-red-500'}
-          bgClass={avgGrowth >= 0 ? 'bg-emerald-50' : 'bg-red-50'} />
-        <div className="bg-white border border-gray-200 rounded-xl px-5 py-4 shadow-sm col-span-2 lg:col-span-1">
-          <p className="text-xs text-gray-400 mb-2">Прирост / Убыль</p>
-          <div className="flex gap-2 items-center mb-1.5">
-            <div className="h-2 rounded-full bg-emerald-400" style={{ flex: positiveCount }} />
-            <div className="h-2 rounded-full bg-red-400"     style={{ flex: negativeCount }} />
-          </div>
-          <div className="flex justify-between text-xs">
-            <span className="text-emerald-600">{positiveCount} прирост ({Math.round(positiveCount / municipalities.length * 100)}%)</span>
-            <span className="text-red-500">{negativeCount} убыль</span>
-          </div>
-        </div>
-      </div>
-
       {/* ── Analytical Report ── */}
       <AnalyticalReport
         filteredData={filteredData}
         municipalities={municipalities}
+        regions={regions}
+        typeOptions={typeOptions}
         selectedRegion={selectedRegion}
+        selectedType={selectedType}
+        onRegionChange={setSelectedRegion}
+        onTypeChange={setSelectedType}
         totalPop={totalPop}
         avgBirth={avgBirth}
         avgDeath={avgDeath}
         avgGrowth={avgGrowth}
         avgMigration={avgMigration}
+        positiveCount={positiveCount}
+        negativeCount={negativeCount}
       />
 
       {/* Charts row 1 */}
@@ -692,7 +1003,7 @@ export function Analytics() {
                 <Legend iconType="circle" iconSize={8} wrapperStyle={{ fontSize: '11px' }} />
                 <Line type="monotone" dataKey="birthRate"         name="Рождаемость"    stroke="#10b981" strokeWidth={2} dot={{ r: 4 }} />
                 <Line type="monotone" dataKey="deathRate"         name="Смертность"     stroke="#ef4444" strokeWidth={2} dot={{ r: 4 }} />
-                <Line type="monotone" dataKey="naturalGrowthRate" name="Ест. прирост (‰)" stroke="#8b5cf6" strokeWidth={2} strokeDasharray="4 3" dot={{ r: 4 }} />
+                <Line type="monotone" dataKey="naturalGrowthRate" name="Ест. прирост (‰)" stroke="#8b5cf6" strokeWidth={2} dot={{ r: 4 }} />
               </LineChart>
             </ResponsiveContainer>
           </div>
@@ -956,8 +1267,8 @@ export function Analytics() {
                       <td className="px-4 py-2.5 text-gray-800 whitespace-nowrap">{m.name}</td>
                       <td className="px-4 py-2.5 text-xs text-gray-400 whitespace-nowrap">{m.region}</td>
                       <td className="px-4 py-2.5">
-                        <span className={`text-xs px-2 py-0.5 rounded-full ${m.type === 'city' ? 'bg-blue-100 text-blue-600' : 'bg-purple-100 text-purple-600'}`}>
-                          {m.type === 'city' ? 'ГО' : 'МР'}
+                        <span className={`text-xs px-2 py-0.5 rounded-full ${isUrbanType(m.type) ? 'bg-blue-100 text-blue-600' : 'bg-purple-100 text-purple-600'}`}>
+                          {shortTypeLabel(m.type)}
                         </span>
                       </td>
                       <td className={`px-4 py-2.5 text-right text-xs font-medium whitespace-nowrap ${isNatGrowth ? val >= 0 ? 'text-emerald-600' : 'text-red-500' : 'text-gray-700'}`}>

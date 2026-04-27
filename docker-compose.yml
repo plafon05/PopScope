@@ -28,8 +28,6 @@ services:
     environment:
       APP_ENV: dev
       APP_DEBUG: 'true'
-      REPORT_USE_LLM: 'false'
-      LLM_PROVIDER: stub
     depends_on:
       db:
         condition: service_healthy

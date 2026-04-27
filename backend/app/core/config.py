@@ -27,21 +27,27 @@ class Settings(BaseSettings):
     )
 
     report_use_llm: bool = Field(default=True, alias='REPORT_USE_LLM')
-    llm_provider: Literal['yandex', 'stub'] = Field(default='stub', alias='LLM_PROVIDER')
+    llm_provider: Literal['gigachat', 'stub'] = Field(default='stub', alias='LLM_PROVIDER')
 
-    yandex_gpt_api_key: str | None = Field(default=None, alias='YANDEX_GPT_API_KEY')
-    yandex_gpt_folder_id: str | None = Field(default=None, alias='YANDEX_GPT_FOLDER_ID')
-    yandex_gpt_model_uri_template: str = Field(
-        default='gpt://{folder_id}/yandexgpt/latest',
-        alias='YANDEX_GPT_MODEL_URI_TEMPLATE',
+    gigachat_auth_key: str | None = Field(default=None, alias='GIGACHAT_AUTH_KEY')
+    gigachat_scope: Literal['GIGACHAT_API_PERS', 'GIGACHAT_API_B2B', 'GIGACHAT_API_CORP'] = Field(
+        default='GIGACHAT_API_PERS',
+        alias='GIGACHAT_SCOPE',
     )
-    yandex_gpt_base_url: str = Field(
-        default='https://llm.api.cloud.yandex.net/foundationModels/v1/completion',
-        alias='YANDEX_GPT_BASE_URL',
+    gigachat_auth_url: str = Field(
+        default='https://ngw.devices.sberbank.ru:9443/api/v2/oauth',
+        alias='GIGACHAT_AUTH_URL',
     )
-    yandex_gpt_temperature: float = Field(default=0.2, alias='YANDEX_GPT_TEMPERATURE')
-    yandex_gpt_max_tokens: int = Field(default=1200, alias='YANDEX_GPT_MAX_TOKENS')
-    yandex_gpt_timeout_seconds: float = Field(default=30.0, alias='YANDEX_GPT_TIMEOUT_SECONDS')
+    gigachat_base_url: str = Field(
+        default='https://gigachat.devices.sberbank.ru/api/v1/chat/completions',
+        alias='GIGACHAT_BASE_URL',
+    )
+    gigachat_model: str = Field(default='GigaChat-2', alias='GIGACHAT_MODEL')
+    gigachat_temperature: float = Field(default=0.2, alias='GIGACHAT_TEMPERATURE')
+    gigachat_max_tokens: int = Field(default=1200, alias='GIGACHAT_MAX_TOKENS')
+    gigachat_timeout_seconds: float = Field(default=30.0, alias='GIGACHAT_TIMEOUT_SECONDS')
+    gigachat_ssl_verify: bool = Field(default=True, alias='GIGACHAT_SSL_VERIFY')
+    gigachat_ca_bundle_path: str | None = Field(default=None, alias='GIGACHAT_CA_BUNDLE_PATH')
 
 
 @lru_cache(maxsize=1)

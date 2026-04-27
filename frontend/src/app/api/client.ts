@@ -26,3 +26,24 @@ export async function apiGet<T>(path: string, params?: Record<string, string | n
 
   return (await response.json()) as T;
 }
+
+export async function apiPost<TResponse, TBody extends object>(
+  path: string,
+  body: TBody,
+): Promise<TResponse> {
+  const response = await fetch(buildUrl(path), {
+    method: 'POST',
+    headers: {
+      Accept: 'application/json',
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify(body),
+  });
+
+  if (!response.ok) {
+    const details = await response.text().catch(() => '');
+    throw new Error(`API error ${response.status}: ${details || response.statusText}`);
+  }
+
+  return (await response.json()) as TResponse;
+}

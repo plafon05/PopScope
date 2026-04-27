@@ -56,18 +56,24 @@ class AnalyticsReportService:
     ) -> str:
         region = request.region or 'Все регионы'
         municipality_type = request.municipality_type or 'Все типы МО'
+        total_from = stats['total_population_year_from']
+        total_to = stats['total_population_year_to']
+        delta_pct = ((total_to - total_from) / total_from * 100) if total_from else 0.0
         return (
             'Сформируй аналитическую справку по демографическим данным. '\
-            'Структура: краткое резюме, ключевые тенденции, риски, рекомендации.\\n\\n'
+            'Структура: краткое резюме, ключевые тенденции, риски, рекомендации. '\
+            'Используй только значения из входных данных, не придумывай новые числа.\\n\\n'
             f'Регион: {region}\\n'
             f'Тип МО: {municipality_type}\\n'
             f'Период: {request.year_from}-{request.year_to}\\n'
             f"Муниципалитетов в выборке: {stats['municipality_count']}\\n"
             f"Средняя рождаемость: {stats['avg_birth_rate']:.2f}‰\\n"
             f"Средняя смертность: {stats['avg_death_rate']:.2f}‰\\n"
-            f"Средняя миграция: {stats['avg_migration']:.2f} чел.\\n"
+            f"Средняя миграция: {stats['avg_migration']:.2f} (на 1000 жителей)\\n"
             f"Средняя численность: {stats['avg_population']:.2f} чел.\\n"
-            f"Суммарная численность (по рядам): {stats['sum_population']:.2f}"
+            f"Суммарная численность в {request.year_from}: {total_from:.0f} чел.\\n"
+            f"Суммарная численность в {request.year_to}: {total_to:.0f} чел.\\n"
+            f"Динамика численности за период: {delta_pct:+.2f}%"
         )
 
     @staticmethod
@@ -86,7 +92,8 @@ class AnalyticsReportService:
             f"Средняя рождаемость: {stats['avg_birth_rate']:.2f}‰, "
             f"смертность: {stats['avg_death_rate']:.2f}‰. "
             f"Естественный прирост {nat_growth_text} ({nat_growth:.2f}‰).\\n"
-            f"Миграционный баланс: {migration_text} ({stats['avg_migration']:.2f} чел.).\\n"
+            f"Миграционный баланс: {migration_text} ({stats['avg_migration']:.2f} на 1000 жителей).\\n"
+            f"Суммарная численность в {request.year_to}: {stats['total_population_year_to']:.0f} чел.\\n"
             'Рекомендуется сфокусироваться на мерах по снижению смертности, '\
             'стимулированию рождаемости и удержанию населения в территориях риска.'
         )

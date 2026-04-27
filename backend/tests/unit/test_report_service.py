@@ -11,9 +11,10 @@ class FakeReportRepository:
             'municipality_count': 43,
             'avg_birth_rate': 10.2,
             'avg_death_rate': 12.1,
-            'avg_migration': 450.0,
+            'avg_migration': -4.0,
             'avg_population': 120000.0,
-            'sum_population': 5_000_000.0,
+            'total_population_year_from': 5_200_000.0,
+            'total_population_year_to': 5_000_000.0,
         }
 
 
