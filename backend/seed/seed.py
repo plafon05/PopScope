@@ -41,24 +41,46 @@ def _parse_optional_int(value: str | None) -> int | None:
     return int(parsed_float)
 
 
+def _read_csv_rows(path: Path) -> list[dict[str, str]]:
+    last_error: Exception | None = None
+    for encoding in ("utf-8-sig", "utf-8", "cp1251"):
+        try:
+            with path.open("r", encoding=encoding, newline="") as f:
+                sample = f.read(4096)
+                f.seek(0)
+                try:
+                    dialect = csv.Sniffer().sniff(sample, delimiters=",;")
+                except csv.Error:
+                    dialect = csv.excel
+                    if ";" in sample and sample.count(";") >= sample.count(","):
+                        dialect.delimiter = ";"
+                reader = csv.DictReader(f, dialect=dialect)
+                return list(reader)
+        except UnicodeDecodeError as exc:
+            last_error = exc
+            continue
+    if last_error is not None:
+        raise last_error
+    raise ValueError(f"Не удалось прочитать CSV: {path}")
+
+
 async def seed_municipalities(session):
     result = await session.execute(select(Municipality).limit(1))
     if result.scalar():
         print("✅ Муниципалитеты уже загружены, пропускаем")
         return
 
-    with open(SEEDS_DIR / "municipalities.csv", encoding="utf-8") as f:
-        reader = csv.DictReader(f)
-        objects = [
-            Municipality(
-                id=int(row["id"]),
-                name=row["name"],
-                region=row["region"],
-                type=row["type"],
-                area=_parse_optional_float(row["area"]),
-            )
-            for row in reader
-        ]
+    rows = _read_csv_rows(SEEDS_DIR / "municipalities.csv")
+    objects = [
+        Municipality(
+            id=int(row["id"]),
+            name=row["name"],
+            region=row["region"],
+            type=row["type"],
+            area=_parse_optional_float(row["area"]),
+        )
+        for row in rows
+    ]
 
     session.add_all(objects)
     await session.commit()
@@ -71,20 +93,19 @@ async def seed_municipality_data(session):
         print("✅ Данные муниципалитетов уже загружены, пропускаем")
         return
 
-    with open(SEEDS_DIR / "municipality_data.csv", encoding="utf-8") as f:
-        reader = csv.DictReader(f)
-        objects = [
-            MunicipalityData(
-                id=int(row["id"]),
-                municipality_id=int(row["municipality_id"]),
-                year=int(row["year"]),
-                population=_parse_optional_int(row["population"]),
-                birth_rate=_parse_optional_float(row["birth_rate"]),
-                death_rate=_parse_optional_float(row["death_rate"]),
-                migration=_parse_optional_float(row["migration"]),
-            )
-            for row in reader
-        ]
+    rows = _read_csv_rows(SEEDS_DIR / "municipality_data.csv")
+    objects = [
+        MunicipalityData(
+            id=int(row["id"]),
+            municipality_id=int(row["municipality_id"]),
+            year=int(row["year"]),
+            population=_parse_optional_int(row["population"]),
+            birth_rate=_parse_optional_float(row["birth_rate"]),
+            death_rate=_parse_optional_float(row["death_rate"]),
+            migration=_parse_optional_float(row["migration"]),
+        )
+        for row in rows
+    ]
 
     session.add_all(objects)
     await session.commit()

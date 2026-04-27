@@ -87,9 +87,7 @@ function toUiId(item: MunicipalityItem): string {
 }
 
 function normalizeMunicipalityType(rawType: string): MunicipalityType {
-  const normalized = rawType.trim().toLowerCase();
-  if (normalized.includes('город')) return 'city';
-  return 'municipality';
+  return rawType.trim().replace(/\s+/g, ' ');
 }
 
 export async function fetchDemographyDataset(): Promise<DemographyDataset> {
