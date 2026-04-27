@@ -11,6 +11,11 @@ const MATCH_MIN_SCORE = 0.5;
 const MATCH_MIN_MARGIN = 0.15;
 
 const REGION_NAME_ALIASES: Record<string, string> = {
+  'дагестан': 'дагестан',
+  'республика дагестан': 'дагестан',
+  'dagestan': 'дагестан',
+  'daghestan': 'дагестан',
+  'republic of dagestan': 'дагестан',
   'чувашия': 'чувашская республика',
   'chuvashia': 'чувашская республика',
   'chuvash republic': 'чувашская республика',
@@ -30,6 +35,9 @@ const REGION_NAME_ALIASES: Record<string, string> = {
 };
 
 const REGION_FRAGMENT_ALIASES: Array<[string, string]> = [
+  ['дагестан', 'дагестан'],
+  ['dagestan', 'дагестан'],
+  ['daghestan', 'дагестан'],
   ['чуваш', 'чувашская республика'],
   ['chuvash', 'чувашская республика'],
   ['saint petersburg', 'санкт петербург'],
@@ -94,12 +102,19 @@ function tokenSimilarity(a: Set<string>, b: Set<string>): number {
 }
 
 export function buildRegionEntriesFromData(data: MunicipalityRecord[]): RegionEntry[] {
-  const latestYear = data.reduce((acc, row) => Math.max(acc, row.year), 0);
+  const latestYearByRegion = new Map<string, number>();
+  data.forEach((row) => {
+    if (row.population <= 0 || row.area <= 0) return;
+    const current = latestYearByRegion.get(row.region) ?? 0;
+    if (row.year > current) latestYearByRegion.set(row.region, row.year);
+  });
+
   const regionPopulation = new Map<string, number>();
   const regionArea = new Map<string, number>();
 
   data.forEach((row) => {
-    if (row.year !== latestYear) return;
+    const latestRegionYear = latestYearByRegion.get(row.region);
+    if (!latestRegionYear || row.year !== latestRegionYear) return;
     if (row.population <= 0 || row.area <= 0) return;
     regionPopulation.set(row.region, (regionPopulation.get(row.region) ?? 0) + row.population);
     regionArea.set(row.region, (regionArea.get(row.region) ?? 0) + row.area);
