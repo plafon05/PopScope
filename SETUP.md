@@ -9,7 +9,7 @@
 Установите:
 - Docker Desktop
 - Docker Compose (обычно входит в Docker Desktop)
-- Node.js 18+ и npm
+- npm
 
 Проверьте:
 ```bash
